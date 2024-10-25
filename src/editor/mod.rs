@@ -1,6 +1,6 @@
 //! The main control flow and functionality of the `ad` editor.
 use crate::{
-    buffer::{ActionOutcome, Buffer, Buffers},
+    buffer::{ActionOutcome, Buffer},
     config::Config,
     die,
     dot::TextObject,
@@ -57,7 +57,6 @@ where
     running: bool,
     modes: Vec<Mode>,
     pending_keys: Vec<Input>,
-    buffers: Buffers,
     windows: Windows,
     tx_events: Sender<Event>,
     rx_events: Receiver<Event>,
@@ -110,8 +109,7 @@ where
             running: true,
             modes: modes(),
             pending_keys: Vec::new(),
-            buffers: Buffers::new(),
-            windows: Windows::new(0, 0, 0),
+            windows: Windows::new(0, 0),
             tx_events,
             rx_events,
             tx_fsys,
@@ -125,8 +123,9 @@ where
     }
 
     /// The id of the currently active buffer
+    #[inline]
     pub fn active_buffer_id(&self) -> usize {
-        self.buffers.active().id
+        self.windows.active_buffer().id
     }
 
     /// Update the stored window size, accounting for the status and message bars
@@ -139,7 +138,7 @@ where
 
     /// Ensure that opening without any files initialises the fsys state correctly
     fn ensure_correct_fsys_state(&self) {
-        if self.buffers.is_empty_scratch() {
+        if self.windows.is_empty_scratch() {
             _ = self.tx_fsys.send(LogEvent::Open(0));
             _ = self.tx_fsys.send(LogEvent::Focus(0));
         }
@@ -164,10 +163,9 @@ where
     }
 
     pub(super) fn refresh_screen_w_minibuffer(&mut self, mb: Option<MiniBufferState<'_>>) {
-        self.windows.clamp_scroll(&mut self.buffers);
+        self.windows.clamp_scroll();
         self.ui.refresh(
             &self.modes[0].name,
-            &self.buffers,
             &self.windows,
             &self.pending_keys,
             self.held_click.as_ref(),
@@ -215,30 +213,13 @@ where
         }
     }
 
-    /// Open a new virtual buffer which will be removed from state when it loses focus.
-    pub(crate) fn open_virtual(
-        &mut self,
-        name: impl Into<String>,
-        content: impl Into<String>,
-        load_in_new_window: bool,
-    ) {
-        self.buffers.open_virtual(name.into(), content.into());
-        if load_in_new_window {
-            self.windows
-                .show_buffer_in_new_window(self.buffers.active());
-        } else {
-            self.windows
-                .show_buffer_in_active_window(self.buffers.active());
-        }
-    }
-
     fn send_buffer_resp(
         &self,
         id: usize,
         tx: Sender<Result<String, String>>,
         f: fn(&Buffer) -> String,
     ) {
-        match self.buffers.with_id(id) {
+        match self.windows.buffer_with_id(id) {
             Some(b) => _ = tx.send(Ok((f)(b))),
             None => {
                 _ = tx.send(Err("unknown buffer".to_string()));
@@ -254,7 +235,7 @@ where
         s: String,
         f: F,
     ) {
-        match self.buffers.with_id_mut(id) {
+        match self.windows.buffer_with_id_mut(id) {
             Some(b) => {
                 (f)(b, s);
                 _ = tx.send(Ok("handled".to_string()))
@@ -327,7 +308,7 @@ where
             }),
 
             AppendOutput { id, s } => {
-                self.buffers.write_output_for_buffer(id, s, &self.cwd);
+                self.windows.write_output_for_buffer(id, s, &self.cwd, true);
                 default_handled();
             }
 
@@ -384,11 +365,11 @@ where
 
         match action {
             AppendToOutputBuffer { bufid, content } => self
-                .buffers
-                .write_output_for_buffer(bufid, content, &self.cwd),
+                .windows
+                .write_output_for_buffer(bufid, content, &self.cwd, true),
             ChangeDirectory { path } => self.change_directory(path),
             CommandMode => self.command_mode(),
-            DeleteBuffer { force } => self.delete_buffer(self.buffers.active().id, force),
+            DeleteBuffer { force } => self.delete_buffer(self.active_buffer_id(), force),
             DragWindow {
                 direction: Arrow::Up,
             } => self.windows.drag_up(),
@@ -412,21 +393,18 @@ where
             JumpListBack => self.jump_backward(),
             LoadDot { new_window } => self.default_load_dot(source, new_window),
             MarkClean { bufid } => self.mark_clean(bufid),
-            NewEditLogTransaction => self.buffers.active_mut().new_edit_log_transaction(),
+            NewEditLogTransaction => self.windows.active_buffer_mut().new_edit_log_transaction(),
             NextBuffer => {
-                self.buffers.next();
-                self.windows
-                    .show_buffer_in_active_window(self.buffers.active());
-                let id = self.active_buffer_id();
+                let id = self.windows.focus_next_buffer();
                 _ = self.tx_fsys.send(LogEvent::Focus(id));
             }
             NextColumn => {
-                self.windows.next_column(&mut self.buffers);
+                self.windows.next_column();
                 let id = self.active_buffer_id();
                 _ = self.tx_fsys.send(LogEvent::Focus(id));
             }
             NextWindowInColumn => {
-                self.windows.next_window_in_column(&mut self.buffers);
+                self.windows.next_window_in_column();
                 let id = self.active_buffer_id();
                 _ = self.tx_fsys.send(LogEvent::Focus(id));
             }
@@ -434,19 +412,16 @@ where
             OpenFileInNewWindow { path } => self.open_file_relative_to_cwd(&path, true),
             Paste => self.paste_from_clipboard(source),
             PreviousBuffer => {
-                self.buffers.previous();
-                self.windows
-                    .show_buffer_in_active_window(self.buffers.active());
-                let id = self.active_buffer_id();
+                let id = self.windows.focus_previous_buffer();
                 _ = self.tx_fsys.send(LogEvent::Focus(id));
             }
             PreviousColumn => {
-                self.windows.prev_column(&mut self.buffers);
+                self.windows.prev_column();
                 let id = self.active_buffer_id();
                 _ = self.tx_fsys.send(LogEvent::Focus(id));
             }
             PreviousWindowInColumn => {
-                self.windows.prev_window_in_column(&mut self.buffers);
+                self.windows.prev_window_in_column();
                 let id = self.active_buffer_id();
                 _ = self.tx_fsys.send(LogEvent::Focus(id));
             }
@@ -461,14 +436,14 @@ where
             SelectBuffer => self.select_buffer(),
             SetMode { m } => self.set_mode(m),
             SetStatusMessage { message } => self.set_status_message(&message),
-            SetViewPort(vp) => self.windows.set_viewport(&mut self.buffers, vp),
+            SetViewPort(vp) => self.windows.set_viewport(vp),
             ShellPipe { cmd } => self.pipe_dot_through_shell_cmd(&cmd),
             ShellReplace { cmd } => self.replace_dot_with_shell_cmd(&cmd),
             ShellRun { cmd } => self.run_shell_cmd(&cmd),
             ShowHelp => self.show_help(),
             UpdateConfig { input } => self.update_config(&input),
             ViewLogs => self.view_logs(),
-            Yank => self.set_clipboard(self.buffers.active().dot_contents()),
+            Yank => self.set_clipboard(self.windows.active_buffer().dot_contents()),
 
             DebugBufferContents => self.debug_buffer_contents(),
             DebugEditLog => self.debug_edit_log(),
@@ -494,33 +469,19 @@ where
     }
 
     fn jump_forward(&mut self) {
-        let maybe_ids = self.buffers.jump_list_forward();
-        if let Some((prev_id, new_id)) = maybe_ids {
-            self.windows
-                .show_buffer_in_active_window(self.buffers.active_mut());
-            self.windows
-                .set_viewport(&mut self.buffers, ViewPort::Center);
-            if new_id != prev_id {
-                _ = self.tx_fsys.send(LogEvent::Focus(new_id));
-            }
+        if let Some(id) = self.windows.jump_forward() {
+            _ = self.tx_fsys.send(LogEvent::Focus(id));
         }
     }
 
     fn jump_backward(&mut self) {
-        let maybe_ids = self.buffers.jump_list_backward();
-        if let Some((prev_id, new_id)) = maybe_ids {
-            self.windows
-                .show_buffer_in_active_window(self.buffers.active_mut());
-            self.windows
-                .set_viewport(&mut self.buffers, ViewPort::Center);
-            if new_id != prev_id {
-                _ = self.tx_fsys.send(LogEvent::Focus(new_id));
-            }
+        if let Some(id) = self.windows.jump_backward() {
+            _ = self.tx_fsys.send(LogEvent::Focus(id));
         }
     }
 
     fn forward_action_to_active_buffer(&mut self, a: Action, source: Source) {
-        if let Some(o) = self.buffers.active_mut().handle_action(a, source) {
+        if let Some(o) = self.windows.active_buffer_mut().handle_action(a, source) {
             match o {
                 ActionOutcome::SetStatusMessage(msg) => self.set_status_message(&msg),
                 ActionOutcome::SetClipboard(s) => self.set_clipboard(s),
@@ -530,7 +491,7 @@ where
 
     /// Returns `true` if the filter was successfully set, false if there was already one in place.
     pub(crate) fn try_set_input_filter(&mut self, bufid: usize, filter: InputFilter) -> bool {
-        let b = match self.buffers.with_id_mut(bufid) {
+        let b = match self.windows.buffer_with_id_mut(bufid) {
             Some(b) => b,
             None => return false,
         };
@@ -547,7 +508,7 @@ where
 
     /// Remove the input filter for the given scope if one exists.
     pub(crate) fn clear_input_filter(&mut self, bufid: usize) {
-        if let Some(b) = self.buffers.with_id_mut(bufid) {
+        if let Some(b) = self.windows.buffer_with_id_mut(bufid) {
             b.input_filter = None;
         }
     }

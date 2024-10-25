@@ -156,10 +156,10 @@ where
     pub fn open_file<P: AsRef<Path>>(&mut self, path: P, new_window: bool) {
         let path = path.as_ref();
         debug!(?path, "opening file");
-        let was_empty_scratch = self.buffers.is_empty_scratch();
+        let was_empty_scratch = self.windows.is_empty_scratch();
         let current_id = self.active_buffer_id();
 
-        match self.buffers.open_or_focus(path) {
+        match self.windows.open_or_focus(path, new_window) {
             Err(e) => self.set_status_message(&format!("Error opening file: {e}")),
 
             Ok(Some(new_id)) => {
@@ -168,22 +168,14 @@ where
                 }
                 _ = self.tx_fsys.send(LogEvent::Open(new_id));
                 _ = self.tx_fsys.send(LogEvent::Focus(new_id));
-
-                if new_window {
-                    self.windows
-                        .show_buffer_in_new_window(self.buffers.active());
-                } else {
-                    self.windows
-                        .show_buffer_in_active_window(self.buffers.active());
-                }
             }
 
             Ok(None) => {
-                match self.buffers.active().state_changed_on_disk() {
+                match self.windows.active_buffer().state_changed_on_disk() {
                     Ok(true) => {
                         let res = self.minibuffer_prompt("File changed on disk, reload? [y/n]: ");
                         if let Some("y" | "Y" | "yes") = res.as_deref() {
-                            let msg = self.buffers.active_mut().reload_from_disk();
+                            let msg = self.windows.active_buffer_mut().reload_from_disk();
                             self.set_status_message(&msg);
                         }
                     }
@@ -193,13 +185,6 @@ where
                 let id = self.active_buffer_id();
                 if id != current_id {
                     _ = self.tx_fsys.send(LogEvent::Focus(id));
-                    if new_window {
-                        self.windows
-                            .show_buffer_in_new_window(self.buffers.active());
-                    } else {
-                        self.windows
-                            .show_buffer_in_active_window(self.buffers.active());
-                    }
                 }
             }
         };
@@ -227,13 +212,23 @@ where
 
     /// This shells out to the fd command line program
     pub(crate) fn find_file(&mut self, new_window: bool) {
-        let d = self.buffers.active().dir().unwrap_or(&self.cwd).to_owned();
+        let d = self
+            .windows
+            .active_buffer()
+            .dir()
+            .unwrap_or(&self.cwd)
+            .to_owned();
         self.find_file_under_dir(&d, new_window);
     }
 
     /// This shells out to the git and fd command line programs
     pub(crate) fn find_repo_file(&mut self, new_window: bool) {
-        let d = self.buffers.active().dir().unwrap_or(&self.cwd).to_owned();
+        let d = self
+            .windows
+            .active_buffer()
+            .dir()
+            .unwrap_or(&self.cwd)
+            .to_owned();
         let s = match self.system.run_command_blocking(
             "git",
             ["rev-parse", "--show-toplevel"],
@@ -252,21 +247,20 @@ where
     }
 
     pub(crate) fn delete_buffer(&mut self, id: usize, force: bool) {
-        match self.buffers.with_id(id) {
+        match self.windows.buffer_with_id(id) {
             Some(b) if b.dirty && !force => self.set_status_message("No write since last change"),
             None => warn!("attempt to close unknown buffer, id={id}"),
             _ => {
-                let is_last_buffer = self.buffers.len() == 1;
                 _ = self.tx_fsys.send(LogEvent::Close(id));
                 self.clear_input_filter(id);
-                self.buffers.close_buffer(id);
-                self.running = !is_last_buffer;
+                let was_last_buffer = self.windows.close_buffer(id);
+                self.running = !was_last_buffer;
             }
         }
     }
 
     pub(crate) fn mark_clean(&mut self, bufid: usize) {
-        if let Some(b) = self.buffers.with_id_mut(bufid) {
+        if let Some(b) = self.windows.buffer_with_id_mut(bufid) {
             b.dirty = false;
         }
     }
@@ -278,7 +272,7 @@ where
             None => return,
         };
 
-        let msg = self.buffers.active_mut().save_to_disk_at(p, force);
+        let msg = self.windows.active_buffer_mut().save_to_disk_at(p, force);
         self.set_status_message(&msg);
         let id = self.active_buffer_id();
         _ = self.tx_fsys.send(LogEvent::Save(id));
@@ -287,7 +281,7 @@ where
     fn get_buffer_save_path(&mut self, fname: Option<String>) -> Option<PathBuf> {
         use BufferKind as Bk;
 
-        let desired_path = match (fname, &self.buffers.active().kind) {
+        let desired_path = match (fname, &self.windows.active_buffer().kind) {
             // File has a known name which is either where we loaded it from or a
             // path that has been set and verified from the Some(s) case that follows
             (None, Bk::File(ref p)) => return Some(p.clone()),
@@ -316,13 +310,13 @@ where
             }
         }
 
-        self.buffers.active_mut().kind = BufferKind::File(desired_path.clone());
+        self.windows.active_buffer_mut().kind = BufferKind::File(desired_path.clone());
 
         Some(desired_path)
     }
 
     pub(super) fn reload_buffer(&mut self, id: usize) {
-        let msg = match self.buffers.with_id_mut(id) {
+        let msg = match self.windows.buffer_with_id_mut(id) {
             Some(b) => b.reload_from_disk(),
             // Silently ignoring attempts to reload unknown buffers
             None => return,
@@ -346,7 +340,7 @@ where
     }
 
     pub(super) fn reload_active_buffer(&mut self) {
-        let msg = self.buffers.active_mut().reload_from_disk();
+        let msg = self.windows.active_buffer_mut().reload_from_disk();
         self.set_status_message(&msg);
     }
 
@@ -365,7 +359,7 @@ where
     }
 
     pub(super) fn exit(&mut self, force: bool) {
-        let dirty_buffers = self.buffers.dirty_buffers();
+        let dirty_buffers = self.windows.dirty_buffers();
         if !dirty_buffers.is_empty() && !force {
             self.set_status_message("No write since last change. Use ':q!' to force exit");
             self.minibuffer_select_from("No write since last change> ", dirty_buffers);
@@ -393,8 +387,8 @@ where
 
     pub(super) fn search_in_current_buffer(&mut self) {
         let numbered_lines = self
-            .buffers
-            .active()
+            .windows
+            .active_buffer()
             .string_lines()
             .into_iter()
             .enumerate()
@@ -403,8 +397,8 @@ where
 
         let selection = self.minibuffer_select_from("> ", numbered_lines);
         if let MiniBufferSelection::Line { cy, .. } = selection {
-            self.buffers.active_mut().dot = Dot::Cur {
-                c: Cur::from_yx(cy, 0, self.buffers.active()),
+            self.windows.active_buffer_mut().dot = Dot::Cur {
+                c: Cur::from_yx(cy, 0, self.windows.active_buffer()),
             };
             self.handle_action(Action::DotSet(TextObject::Line, 1), Source::Fsys);
             self.handle_action(Action::SetViewPort(ViewPort::Center), Source::Fsys);
@@ -431,7 +425,7 @@ where
     }
 
     pub(super) fn select_buffer(&mut self) {
-        let selection = self.minibuffer_select_from("> ", self.buffers.as_buf_list());
+        let selection = self.minibuffer_select_from("> ", self.windows.as_buffer_list());
         if let MiniBufferSelection::Line { line, .. } = selection {
             // unwrap is fine here because we know the format of the buf list we are supplying
             if let Ok(id) = line.split_once(' ').unwrap().0.parse::<usize>() {
@@ -441,15 +435,15 @@ where
     }
 
     pub(super) fn focus_buffer(&mut self, id: usize) {
-        self.buffers.focus_id(id);
+        self.windows.focus_id(id);
         _ = self.tx_fsys.send(LogEvent::Focus(id));
     }
 
     pub(super) fn debug_buffer_contents(&mut self) {
         self.minibuffer_select_from(
             "<RAW BUFFER> ",
-            self.buffers
-                .active()
+            self.windows
+                .active_buffer()
                 .string_lines()
                 .into_iter()
                 .map(|l| format!("{:?}", l))
@@ -458,19 +452,20 @@ where
     }
 
     pub(super) fn view_logs(&mut self) {
-        self.open_virtual("+logs", self.log_buffer.content(), false)
+        self.windows
+            .open_virtual("+logs", self.log_buffer.content(), true)
     }
 
     pub(super) fn show_help(&mut self) {
-        self.open_virtual("+help", gen_help_docs(), false)
+        self.windows.open_virtual("+help", gen_help_docs(), true)
     }
 
     pub(super) fn debug_edit_log(&mut self) {
-        self.minibuffer_select_from("<EDIT LOG> ", self.buffers.active().debug_edit_log());
+        self.minibuffer_select_from("<EDIT LOG> ", self.windows.active_buffer().debug_edit_log());
     }
 
     pub(super) fn expand_current_dot(&mut self) {
-        self.buffers.active_mut().expand_cur_dot();
+        self.windows.active_buffer_mut().expand_cur_dot();
     }
 
     /// Default semantics for attempting to load the current dot:
@@ -486,7 +481,7 @@ where
     /// materials available at http://acme.cat-v.org/ to learn more about what is possible with
     /// such a system.
     pub(super) fn default_load_dot(&mut self, source: Source, load_in_new_window: bool) {
-        let b = self.buffers.active_mut();
+        let b = self.windows.active_buffer_mut();
         b.expand_cur_dot();
         if b.notify_load(source) {
             return; // input filter in place
@@ -540,14 +535,15 @@ where
                     .get("filename")
                     .cloned()
                     .unwrap_or_else(|| "+plumbing-message".to_string());
-                self.open_virtual(filename, data, load_in_new_window);
+                self.windows
+                    .open_virtual(filename, data, load_in_new_window);
             }
             _ => {
                 self.open_file(data, load_in_new_window);
                 if let Some(s) = attrs.get("addr") {
                     match Addr::parse(&mut s.chars().peekable()) {
                         Ok(mut addr) => {
-                            let b = self.buffers.active_mut();
+                            let b = self.windows.active_buffer_mut();
                             b.dot = b.map_addr(&mut addr);
                         }
                         Err(e) => self.set_status_message(&format!("malformed addr: {e:?}")),
@@ -563,7 +559,7 @@ where
         s: String,
         load_in_new_window: bool,
     ) {
-        let b = match self.buffers.with_id_mut(bufid) {
+        let b = match self.windows.buffer_with_id_mut(bufid) {
             Some(b) => b,
             None => return,
         };
@@ -594,7 +590,7 @@ where
         if is_file {
             self.open_file(path, load_in_new_window);
             if let Some(mut addr) = maybe_addr {
-                let b = self.buffers.active_mut();
+                let b = self.windows.active_buffer_mut();
                 b.dot = b.map_addr(&mut addr);
                 self.handle_action(Action::SetViewPort(ViewPort::Center), Source::Fsys);
             }
@@ -614,7 +610,7 @@ where
     /// materials available at http://acme.cat-v.org/ to learn more about what is possible with
     /// such a system.
     pub(super) fn default_execute_dot(&mut self, arg: Option<(Range, String)>, source: Source) {
-        let b = self.buffers.active_mut();
+        let b = self.windows.active_buffer_mut();
         b.expand_cur_dot();
         if b.notify_execute(source, arg.clone()) {
             return; // input filter in place
@@ -634,14 +630,14 @@ where
 
     pub(super) fn execute_explicit_string(&mut self, bufid: usize, s: String, source: Source) {
         let current_id = self.active_buffer_id();
-        self.buffers.focus_id_silent(bufid);
+        self.windows.focus_id_silent(bufid);
 
         match self.parse_command(s.trim()) {
             Some(actions) => self.handle_actions(actions, source),
             None => self.run_shell_cmd(s.trim()),
         }
 
-        self.buffers.focus_id_silent(current_id);
+        self.windows.focus_id_silent(current_id);
     }
 
     pub(super) fn execute_command(&mut self, cmd: &str) {
@@ -663,11 +659,11 @@ where
         };
 
         let mut buf = Vec::new();
-        let fname = self.buffers.active().full_name().to_string();
-        match prog.execute(self.buffers.active_mut(), &fname, &mut buf) {
+        let fname = self.windows.active_buffer().full_name().to_string();
+        match prog.execute(self.windows.active_buffer_mut(), &fname, &mut buf) {
             Ok(new_dot) => {
-                self.buffers.record_jump_position();
-                self.buffers.active_mut().dot = new_dot;
+                self.windows.record_jump_position();
+                self.windows.active_buffer_mut().dot = new_dot;
             }
 
             Err(e) => self.set_status_message(&format!("Error running edit command: {e:?}")),
@@ -675,8 +671,12 @@ where
 
         if !buf.is_empty() {
             let id = self.active_buffer_id();
-            self.buffers
-                .write_output_for_buffer(id, String::from_utf8(buf).unwrap(), &self.cwd);
+            self.windows.write_output_for_buffer(
+                id,
+                String::from_utf8(buf).unwrap(),
+                &self.cwd,
+                true,
+            );
         }
     }
 
@@ -713,7 +713,7 @@ where
 
     pub(super) fn pipe_dot_through_shell_cmd(&mut self, raw_cmd_str: &str) {
         let (s, d) = {
-            let b = self.buffers.active();
+            let b = self.windows.active_buffer();
             (b.dot_contents(), b.dir().unwrap_or(&self.cwd))
         };
 
@@ -729,7 +729,7 @@ where
     }
 
     pub(super) fn replace_dot_with_shell_cmd(&mut self, raw_cmd_str: &str) {
-        let d = self.buffers.active().dir().unwrap_or(&self.cwd);
+        let d = self.windows.active_buffer().dir().unwrap_or(&self.cwd);
         let id = self.active_buffer_id();
         let res = self
             .system
@@ -742,7 +742,7 @@ where
     }
 
     pub(super) fn run_shell_cmd(&mut self, raw_cmd_str: &str) {
-        let d = self.buffers.active().dir().unwrap_or(&self.cwd);
+        let d = self.windows.active_buffer().dir().unwrap_or(&self.cwd);
         let id = self.active_buffer_id();
         self.system
             .run_command("sh", ["-c", raw_cmd_str], d, id, self.tx_events.clone());

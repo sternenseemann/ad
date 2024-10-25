@@ -1,6 +1,6 @@
 //! A terminal UI for ad
 use crate::{
-    buffer::{Buffer, Buffers},
+    buffer::Buffer,
     config::ColorScheme,
     config_handle, die,
     dot::{LineRange, Range},
@@ -129,7 +129,7 @@ impl Tui {
     fn render_column(
         &self,
         col: &Column,
-        buffers: &Buffers,
+        windows: &Windows,
         load_exec_range: Option<(bool, Range)>,
         screen_rows: usize,
         cs: &ColorScheme,
@@ -138,7 +138,9 @@ impl Tui {
 
         for (is_focus, win) in col.wins.iter() {
             let rng = if is_focus { load_exec_range } else { None };
-            let b = buffers.with_id(win.view.bufid).expect("valid buffer id");
+            let b = windows
+                .buffer_with_id(win.view.bufid)
+                .expect("valid buffer id");
             rendered_rows.extend(self.render_window(b, win, col.n_cols, rng, cs));
             rendered_rows.push(box_draw_str(&HLINE.repeat(col.n_cols), cs));
         }
@@ -185,13 +187,12 @@ impl Tui {
 
     fn render_windows(
         &self,
-        buffers: &Buffers,
         windows: &Windows,
         load_exec_range: Option<(bool, Range)>,
         screen_rows: usize,
         cs: &ColorScheme,
     ) -> Vec<String> {
-        if buffers.is_empty_scratch() {
+        if windows.is_empty_scratch() {
             return self.render_banner(screen_rows, cs);
         }
 
@@ -200,7 +201,7 @@ impl Tui {
             .iter()
             .map(|(is_focus, col)| {
                 let rng = if is_focus { load_exec_range } else { None };
-                self.render_column(col, buffers, rng, screen_rows, cs)
+                self.render_column(col, windows, rng, screen_rows, cs)
             })
             .collect();
 
@@ -372,7 +373,6 @@ impl UserInterface for Tui {
     fn refresh(
         &mut self,
         mode_name: &str,
-        buffers: &Buffers,
         windows: &Windows,
         pending_keys: &[Input],
         held_click: Option<&Click>,
@@ -382,7 +382,7 @@ impl UserInterface for Tui {
         self.screen_cols = windows.screen_cols;
         let w_minibuffer = mb.is_some();
         let mb = mb.unwrap_or_default();
-        let active_buffer = buffers.active();
+        let active_buffer = windows.active_buffer();
         let mb_lines = mb.b.map(|b| b.len_lines()).unwrap_or_default();
         let mb_offset = if mb_lines > 0 { 1 } else { 0 };
 
@@ -408,7 +408,6 @@ impl UserInterface for Tui {
         lines.push(format!("{}{}", Cursor::Hide, Cursor::ToStart));
 
         lines.append(&mut self.render_windows(
-            buffers,
             windows,
             load_exec_range,
             effective_screen_rows,

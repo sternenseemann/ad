@@ -1,6 +1,5 @@
 //! The ad user interface
 use crate::{
-    buffer::Buffers,
     editor::{Click, EditorMode, MiniBufferState},
     input::Event,
     key::Input,
@@ -30,7 +29,6 @@ pub(crate) trait UserInterface {
     fn refresh(
         &mut self,
         mode_name: &str,
-        buffers: &Buffers,
         windows: &Windows,
         pending_keys: &[Input],
         held_click: Option<&Click>,
@@ -107,7 +105,6 @@ impl UserInterface for Ui {
     fn refresh(
         &mut self,
         mode_name: &str,
-        buffers: &Buffers,
         windows: &Windows,
         pending_keys: &[Input],
         held_click: Option<&Click>,
@@ -115,9 +112,7 @@ impl UserInterface for Ui {
     ) {
         match self {
             Self::Headless => (),
-            Self::Tui(tui) => {
-                tui.refresh(mode_name, buffers, windows, pending_keys, held_click, mb)
-            }
+            Self::Tui(tui) => tui.refresh(mode_name, windows, pending_keys, held_click, mb),
         }
     }
 

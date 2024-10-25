@@ -41,6 +41,19 @@ impl Buffers {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_stubbed(ids: &[usize]) -> Self {
+        Self {
+            next_id: ids.last().unwrap() + 1,
+            inner: ZipList::try_from_iter(
+                ids.iter()
+                    .map(|i| Buffer::new_virtual(*i, "".to_owned(), "".to_owned())),
+            )
+            .unwrap(),
+            jump_list: JumpList::default(),
+        }
+    }
+
     /// Returns the id of a newly created buffer, None if the buffer already existed
     pub fn open_or_focus<P: AsRef<Path>>(&mut self, path: P) -> io::Result<Option<BufferId>> {
         let path = match path.as_ref().canonicalize() {
@@ -136,7 +149,7 @@ impl Buffers {
     }
 
     /// Used to seed the buffer selection mini-buffer
-    pub(crate) fn as_buf_list(&self) -> Vec<String> {
+    pub(crate) fn as_buffer_list(&self) -> Vec<String> {
         let mut entries: Vec<String> = self
             .inner
             .iter()
@@ -154,16 +167,18 @@ impl Buffers {
         entries
     }
 
-    fn contains_bufid(&self, id: BufferId) -> bool {
+    pub(crate) fn contains_bufid(&self, id: BufferId) -> bool {
         self.inner.iter().any(|(_, b)| b.id == id)
     }
 
-    pub(crate) fn focus_id(&mut self, id: BufferId) {
+    pub(crate) fn focus_id(&mut self, id: BufferId) -> Option<BufferId> {
         if !self.contains_bufid(id) || self.active().id == id {
-            return;
+            return None;
         }
         self.record_jump_position();
         self.inner.focus_element_by(|b| b.id == id);
+
+        Some(id)
     }
 
     /// Focus the given buffer ID without touching the jump list
@@ -244,13 +259,18 @@ impl Buffers {
     }
 
     /// Append to the +output buffer assigned to the buffer with provided id.
-    pub(crate) fn write_output_for_buffer(&mut self, id: usize, s: String, cwd: &Path) {
+    pub(crate) fn write_output_for_buffer(
+        &mut self,
+        id: usize,
+        s: String,
+        cwd: &Path,
+    ) -> Option<BufferId> {
         let key = match self.with_id(id) {
             Some(b) => b.output_file_key(cwd),
             None => format!("{}/DEFAULT_OUTPUT_BUFFER", cwd.display()),
         };
 
-        let id = match self
+        match self
             .inner
             .iter_mut()
             .find(|(_, b)| b.kind == BufferKind::Output(key.clone()))
@@ -258,7 +278,7 @@ impl Buffers {
             Some((_, b)) => {
                 b.append(s, Source::Fsys);
 
-                b.id
+                None
             }
 
             None => {
@@ -268,11 +288,9 @@ impl Buffers {
                 self.record_jump_position();
                 self.inner.insert(b);
 
-                id
+                Some(id)
             }
-        };
-
-        self.focus_id(id);
+        }
     }
 }
 

@@ -304,10 +304,13 @@ impl<T> ZipList<T> {
     /// # Panics
     /// Panics if the focus was the only element
     pub fn remove_focused_unchecked(&mut self) -> T {
-        self.down
+        let mut focus = self.down
             .pop_front()
             .or_else(|| self.up.pop_front())
-            .expect("Ziplist only contained a single element")
+            .expect("Ziplist only contained a single element");
+        swap(&mut focus, &mut self.focus);
+        
+        focus
     }
 
     /// Remove the first element that matches the given predicate function. If doing so would
@@ -369,6 +372,19 @@ impl<T> ZipList<T> {
         } else {
             let (_, maybe_stack) = new_stack.remove_focused();
             maybe_stack
+        }
+    }
+
+    pub fn filter_unchecked<F>(&mut self, f: F)
+    where
+        F: Fn(&T) -> bool,
+        T: std::fmt::Debug
+    {
+        self.up.retain(&f);
+        self.down.retain(&f);
+
+        if !f(&self.focus) {
+            self.remove_focused_unchecked();
         }
     }
 

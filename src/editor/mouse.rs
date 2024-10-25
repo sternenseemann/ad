@@ -77,10 +77,8 @@ where
                     return;
                 }
 
-                let active_buffer_changed =
-                    self.windows
-                        .set_dot_from_screen_coords(&mut self.buffers, x, y);
-                let b = self.buffers.active_mut();
+                let active_buffer_changed = self.windows.set_dot_from_screen_coords(x, y);
+                let b = self.windows.active_buffer_mut();
 
                 if self.last_click_was_left && !active_buffer_changed {
                     let delta = (self.last_click_time - last_click_time).as_millis();
@@ -107,32 +105,28 @@ where
                         return;
                     }
 
-                    let (bufid, cur) =
-                        self.windows
-                            .cur_from_screen_coords(&mut self.buffers, x, y, false);
-                    if bufid != self.buffers.active().id {
+                    let (bufid, cur) = self.windows.cur_from_screen_coords(x, y, false);
+                    if bufid != self.windows.active_buffer().id {
                         return;
                     }
                     click.selection.set_active_cursor(cur);
 
                     if click.btn == Left {
-                        self.buffers.active_mut().dot = Dot::from(click.selection);
+                        self.windows.active_buffer_mut().dot = Dot::from(click.selection);
                     }
                 }
             }
 
             (Press, _, WheelUp) => {
                 self.last_click_was_left = false;
-                self.windows
-                    .focus_buffer_for_screen_coords(&mut self.buffers, x, y);
-                self.windows.scroll_up(self.buffers.active_mut());
+                self.windows.focus_buffer_for_screen_coords(x, y);
+                self.windows.scroll_up();
             }
 
             (Press, _, WheelDown) => {
                 self.last_click_was_left = false;
-                self.windows
-                    .focus_buffer_for_screen_coords(&mut self.buffers, x, y);
-                self.windows.scroll_down(self.buffers.active_mut());
+                self.windows.focus_buffer_for_screen_coords(x, y);
+                self.windows.scroll_down();
             }
 
             (Release, m, b) => {
@@ -151,12 +145,10 @@ where
                     return;
                 }
 
-                let (bufid, cur) =
-                    self.windows
-                        .cur_from_screen_coords(&mut self.buffers, x, y, false);
+                let (bufid, cur) = self.windows.cur_from_screen_coords(x, y, false);
                 // Support releasing the mouse over a different window as actioning the selection
                 // as it was present in the active buffer
-                if bufid == self.buffers.active().id {
+                if bufid == self.active_buffer_id() {
                     click.selection.set_active_cursor(cur);
                 }
 
@@ -174,10 +166,7 @@ where
 
     #[inline]
     fn click_from_button(&mut self, btn: MouseButton, x: usize, y: usize) -> Click {
-        let (bufid, cur) = self
-            .windows
-            .cur_from_screen_coords(&mut self.buffers, x, y, true);
-        self.buffers.focus_id(bufid);
+        let (_, cur) = self.windows.cur_from_screen_coords(x, y, true);
 
         Click::new(btn, Range::from_cursors(cur, cur, false))
     }
@@ -197,7 +186,7 @@ where
                         self.held_click = Some(click);
                     } else if !is_right && !click.cut_handled {
                         self.forward_action_to_active_buffer(Action::Delete, Source::Mouse);
-                        click.selection = self.buffers.active().dot.as_range();
+                        click.selection = self.windows.active_buffer().dot.as_range();
                         click.cut_handled = true;
                         self.held_click = Some(click);
                     }
@@ -225,17 +214,17 @@ where
             // For Middle clicks, if there is also a range dot in the buffer then that is
             // used as an argument to the command being executed.
             if is_right {
-                self.buffers.active_mut().dot = Dot::from(click.selection);
+                self.windows.active_buffer_mut().dot = Dot::from(click.selection);
                 self.default_load_dot(Source::Mouse, load_in_new_window);
             } else {
-                let dot = self.buffers.active().dot;
-                self.buffers.active_mut().dot = Dot::from(click.selection);
+                let dot = self.windows.active_buffer().dot;
+                self.windows.active_buffer_mut().dot = Dot::from(click.selection);
 
                 if dot.is_range() {
                     // Execute as if the click selection was dot then reset dot
-                    let arg = dot.content(self.buffers.active()).trim().to_string();
+                    let arg = dot.content(self.windows.active_buffer()).trim().to_string();
                     self.default_execute_dot(Some((dot.as_range(), arg)), Source::Mouse);
-                    self.buffers.active_mut().dot = dot;
+                    self.windows.active_buffer_mut().dot = dot;
                 } else {
                     self.default_execute_dot(None, Source::Mouse);
                 }
@@ -244,8 +233,13 @@ where
             // In the case where the click selection was a Cur rather than a Range we
             // set the buffer dot to the click location if it is outside of the current buffer
             // dot (and allow smart expand to handle generating the selection) before we Load/Execute
-            if !self.buffers.active().dot.contains(&click.selection.start) {
-                self.buffers.active_mut().dot = Dot::from(click.selection.start);
+            if !self
+                .windows
+                .active_buffer()
+                .dot
+                .contains(&click.selection.start)
+            {
+                self.windows.active_buffer_mut().dot = Dot::from(click.selection.start);
             }
 
             if is_right {
@@ -659,8 +653,9 @@ mod tests {
             },
         );
         ed.update_window_size(100, 80); // Needed in order to keep clicks in bounds
-        ed.open_virtual("test", "some text to test with", false);
-        ed.buffers.active_mut().dot = Dot::Cur { c: Cur { idx: 5 } };
+        ed.windows
+            .open_virtual("test", "some text to test with", false);
+        ed.windows.active_buffer_mut().dot = Dot::Cur { c: Cur { idx: 5 } };
 
         // attach an input filter so we can intercept load and execute events
         let (tx, rx) = channel();
@@ -672,7 +667,7 @@ mod tests {
         }
 
         let recvd_fsys_events: Vec<_> = rx.try_iter().collect();
-        let b = ed.buffers.active();
+        let b = ed.windows.active_buffer();
 
         assert_eq!(ed.held_click, click, "click");
         assert_eq!(b.dot.content(b), dot, "dot content");
