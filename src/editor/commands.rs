@@ -53,6 +53,10 @@ fn parse_command(input: &str, active_buffer_id: usize, cwd: &Path) -> Result<Act
 
         "db" | "delete-buffer" => Ok(Single(DeleteBuffer { force: false })),
         "db!" | "delete-buffer!" => Ok(Single(DeleteBuffer { force: true })),
+        "dc" | "delete-column" => Ok(Single(DeleteColumn { force: false })),
+        "dc!" | "delete-column!" => Ok(Single(DeleteColumn { force: true })),
+        "dw" | "delete-window" => Ok(Single(DeleteWindow { force: false })),
+        "dw!" | "delete-window!" => Ok(Single(DeleteWindow { force: true })),
 
         "echo" => Ok(Single(SetStatusMessage {
             message: args.to_string(),

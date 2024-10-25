@@ -50,6 +50,8 @@ pub enum Action {
     CommandMode,
     Delete,
     DeleteBuffer { force: bool },
+    DeleteColumn { force: bool },
+    DeleteWindow { force: bool },
     DotCollapseFirst,
     DotCollapseLast,
     DotExtendBackward(TextObject, usize),
@@ -256,6 +258,20 @@ where
                 let was_last_buffer = self.windows.close_buffer(id);
                 self.running = !was_last_buffer;
             }
+        }
+    }
+
+    pub(crate) fn delete_active_window(&mut self, force: bool) {
+        let is_last_window = self.windows.close_active_window();
+        if is_last_window {
+            self.exit(force);
+        }
+    }
+
+    pub(crate) fn delete_active_column(&mut self, force: bool) {
+        let is_last_column = self.windows.close_active_column();
+        if is_last_column {
+            self.exit(force);
         }
     }
 

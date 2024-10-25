@@ -203,6 +203,35 @@ impl Windows {
         id
     }
 
+    /// Close the active window, if this was the last remaining window then
+    /// Editor::delete_active_window will exit.
+    pub(crate) fn close_active_window(&mut self) -> bool {
+        if self.cols.len() == 1 && self.cols.focus.wins.len() == 1 {
+            return true;
+        }
+
+        if self.cols.focus.wins.len() == 1 {
+            self.cols.remove_focused_unchecked();
+        } else {
+            self.cols.focus.wins.remove_focused_unchecked();
+        }
+        self.update_screen_size(self.screen_rows, self.screen_cols);
+
+        false
+    }
+
+    /// Close the active column, if this was the last remaining column then
+    /// Editor::delete_active_column will exit.
+    pub(crate) fn close_active_column(&mut self) -> bool {
+        if self.cols.len() == 1 {
+            return true;
+        }
+        self.cols.remove_focused_unchecked();
+        self.update_screen_size(self.screen_rows, self.screen_cols);
+
+        false
+    }
+
     pub(crate) fn record_jump_position(&mut self) {
         self.buffers.record_jump_position();
     }

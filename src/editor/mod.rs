@@ -370,6 +370,8 @@ where
             ChangeDirectory { path } => self.change_directory(path),
             CommandMode => self.command_mode(),
             DeleteBuffer { force } => self.delete_buffer(self.active_buffer_id(), force),
+            DeleteColumn { force } => self.delete_active_column(force),
+            DeleteWindow { force } => self.delete_active_window(force),
             DragWindow {
                 direction: Arrow::Up,
             } => self.windows.drag_up(),
