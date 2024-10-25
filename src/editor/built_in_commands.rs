@@ -27,16 +27,24 @@ pub fn built_in_commands() -> Vec<(Vec<&'static str>, &'static str)> {
             "delete the active buffer as long as there are no pending changes",
         ),
         (
+            vec!["db!", "delete-buffer!"],
+            "delete the active buffer discarding all pending changes",
+        ),
+        (
             vec!["dc", "delete-column"],
-            "delete the active column",
+            "delete the active column so long as this would not exit the editor with unsaved changes",
+        ),
+        (
+            vec!["dc!", "delete-column!"],
+            "delete the active column discarding all pendings changes if this is the last column",
         ),
         (
             vec!["dw", "delete-window"],
-            "delete the active window",
+            "delete the active window so long as this would not exit the editor with unsaved changes",
         ),
         (
-            vec!["db!", "delete-buffer!"],
-            "delete the active buffer discarding all pending changes",
+            vec!["dw!", "delete-window!"],
+            "delete the active window discarding all pendings changes if this is the last window",
         ),
         (
             vec!["echo"],

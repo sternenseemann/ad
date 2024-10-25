@@ -304,12 +304,13 @@ impl<T> ZipList<T> {
     /// # Panics
     /// Panics if the focus was the only element
     pub fn remove_focused_unchecked(&mut self) -> T {
-        let mut focus = self.down
+        let mut focus = self
+            .down
             .pop_front()
             .or_else(|| self.up.pop_front())
             .expect("Ziplist only contained a single element");
         swap(&mut focus, &mut self.focus);
-        
+
         focus
     }
 
@@ -378,7 +379,6 @@ impl<T> ZipList<T> {
     pub fn filter_unchecked<F>(&mut self, f: F)
     where
         F: Fn(&T) -> bool,
-        T: std::fmt::Debug
     {
         self.up.retain(&f);
         self.down.retain(&f);
