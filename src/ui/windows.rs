@@ -11,31 +11,6 @@ use std::{cmp::min, io, mem::swap, path::Path};
 use tracing::debug;
 use unicode_width::UnicodeWidthChar;
 
-macro_rules! drag {
-    ($self:expr, $others:ident, $focus_fn:ident, $pos:ident) => {{
-        if $self.cols.len() == 1 || $self.cols.$others.is_empty() {
-            if $self.cols.focus.wins.len() == 1 {
-                return;
-            }
-            let win = $self.cols.focus.wins.remove_focused_unchecked();
-            let mut col = Column::new($self.screen_rows, $self.screen_cols, &[0]);
-            col.wins.focus = win;
-            $self.cols.insert_at(Position::$pos, col);
-            $self.cols.$focus_fn();
-        } else {
-            let win = if $self.cols.focus.wins.len() == 1 {
-                $self.cols.remove_focused_unchecked().wins.focus
-            } else {
-                $self.cols.focus.wins.remove_focused_unchecked()
-            };
-
-            $self.cols.$focus_fn();
-            $self.cols.focus.wins.insert(win);
-        }
-        $self.update_screen_size($self.screen_rows, $self.screen_cols);
-    }};
-}
-
 /// Windows is a screen layout of the windows available for displaying buffer
 /// content to the user. The available screen space is split into a number of
 /// columns each containing a vertical stack of windows.
@@ -332,14 +307,56 @@ impl Windows {
     ///   direction is towards other columns then the window is moved to that column
     ///   and the previous column is removed.
     pub(crate) fn drag_left(&mut self) {
-        drag!(self, up, focus_up, Head);
+        if self.cols.len() == 1 || self.cols.up.is_empty() {
+            if self.cols.focus.wins.len() == 1 {
+                return;
+            }
+            let win = self.cols.focus.wins.remove_focused_unchecked();
+            let mut col = Column::new(self.screen_rows, self.screen_cols, &[0]);
+            col.wins.focus = win;
+            self.cols.insert_at(Position::Head, col);
+            self.cols.focus_up();
+        } else {
+            if self.cols.focus.wins.len() == 1 {
+                let on_left = self.cols.up.is_empty();
+                let win = self.cols.remove_focused_unchecked().wins.focus;
+                if !on_left {
+                    self.cols.focus_up();
+                }
+                self.cols.focus.wins.insert(win);
+            } else {
+                let win = self.cols.focus.wins.remove_focused_unchecked();
+                self.cols.focus_up();
+                self.cols.focus.wins.insert(win);
+            }
+        }
+        self.update_screen_size(self.screen_rows, self.screen_cols);
     }
 
     /// Drag the focused window to the column on the right.
     ///
     /// See [Windows::drag_left] for semantics.
     pub(crate) fn drag_right(&mut self) {
-        drag!(self, down, focus_down, Tail);
+        if self.cols.len() == 1 || self.cols.down.is_empty() {
+            if self.cols.focus.wins.len() == 1 {
+                return;
+            }
+            let win = self.cols.focus.wins.remove_focused_unchecked();
+            let mut col = Column::new(self.screen_rows, self.screen_cols, &[0]);
+            col.wins.focus = win;
+            self.cols.insert_at(Position::Tail, col);
+            self.cols.focus_down();
+        } else {
+            if self.cols.focus.wins.len() == 1 {
+                let win = self.cols.remove_focused_unchecked().wins.focus;
+                self.cols.focus.wins.insert(win);
+            } else {
+                let win = self.cols.focus.wins.remove_focused_unchecked();
+                self.cols.focus_down();
+                self.cols.focus.wins.insert(win);
+            }
+        }
+        self.update_screen_size(self.screen_rows, self.screen_cols);
     }
 
     #[inline]
@@ -796,6 +813,59 @@ mod tests {
             .iter()
             .flat_map(|(_, c)| c.wins.iter().map(|(_, w)| w.view.bufid))
             .collect::<Vec<_>>()
+    }
+
+    #[test]
+    fn drag_left_works() {
+        let mut ws = test_windows(&[1, 1, 2], 80, 100);
+        ws.next_column();
+        assert_eq!(ws.active_buffer().id, 1);
+        ws.drag_left();
+
+        assert_eq!(ws.cols.len(), 2);
+        let first_col: Vec<usize> = ws
+            .cols
+            .head()
+            .wins
+            .iter()
+            .map(|(_, w)| w.view.bufid)
+            .collect();
+        let second_col: Vec<usize> = ws
+            .cols
+            .last()
+            .wins
+            .iter()
+            .map(|(_, w)| w.view.bufid)
+            .collect();
+
+        assert_eq!(&first_col, &[1, 0]);
+        assert_eq!(&second_col, &[2, 3]);
+    }
+
+    #[test]
+    fn drag_right_works() {
+        let mut ws = test_windows(&[1, 1, 2], 80, 100);
+        assert_eq!(ws.active_buffer().id, 0);
+        ws.drag_right();
+
+        assert_eq!(ws.cols.len(), 2);
+        let first_col: Vec<usize> = ws
+            .cols
+            .head()
+            .wins
+            .iter()
+            .map(|(_, w)| w.view.bufid)
+            .collect();
+        let second_col: Vec<usize> = ws
+            .cols
+            .last()
+            .wins
+            .iter()
+            .map(|(_, w)| w.view.bufid)
+            .collect();
+
+        assert_eq!(&first_col, &[0, 1]);
+        assert_eq!(&second_col, &[2, 3]);
     }
 
     #[test]
