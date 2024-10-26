@@ -77,10 +77,10 @@ where
                     return;
                 }
 
-                let active_buffer_changed = self.windows.set_dot_from_screen_coords(x, y);
+                let click_in_active_buffer = self.windows.set_dot_from_screen_coords(x, y);
                 let b = self.windows.active_buffer_mut();
 
-                if self.last_click_was_left && !active_buffer_changed {
+                if self.last_click_was_left && click_in_active_buffer {
                     let delta = (self.last_click_time - last_click_time).as_millis();
                     if delta < config_handle!().double_click_ms {
                         b.try_expand_delimited();
