@@ -1,13 +1,14 @@
 //! Layout of UI windows
 use crate::{
     buffer::{Buffer, BufferId, Buffers},
-    config_handle, die,
+    config_handle,
     dot::{Cur, Dot},
     editor::ViewPort,
     ziplist,
     ziplist::{Position, ZipList},
 };
 use std::{cmp::min, io, mem::swap, path::Path};
+use tracing::debug;
 use unicode_width::UnicodeWidthChar;
 
 macro_rules! drag {
@@ -91,13 +92,12 @@ impl Windows {
         new_window: bool,
     ) -> io::Result<Option<BufferId>> {
         let opt = self.buffers.open_or_focus(path)?;
+        let id = self.active_buffer().id;
 
-        if let Some(id) = opt {
-            if new_window {
-                self.show_buffer_in_new_window(id);
-            } else {
-                self.show_buffer_in_active_window(id);
-            }
+        if new_window {
+            self.show_buffer_in_new_window(id);
+        } else {
+            self.show_buffer_in_active_window(id);
         }
 
         Ok(opt)
@@ -507,7 +507,8 @@ impl Windows {
             }
         }
 
-        die!("click out of bounds (x, y)=({x}, {y})");
+        debug!("click out of bounds (x, y)=({x}, {y})");
+        self.active_buffer().id
     }
 
     pub(crate) fn focus_buffer_for_screen_coords(&mut self, x: usize, y: usize) -> BufferId {
@@ -536,7 +537,8 @@ impl Windows {
             }
         }
 
-        die!("click out of bounds (x, y)=({x}, {y})");
+        debug!("click out of bounds (x, y)=({x}, {y})");
+        self.active_buffer().id
     }
 
     pub(crate) fn cur_from_screen_coords(
