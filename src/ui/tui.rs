@@ -142,7 +142,7 @@ impl Tui {
                 .buffer_with_id(win.view.bufid)
                 .expect("valid buffer id");
             rendered_rows.extend(self.render_window(b, win, col.n_cols, rng, cs));
-            rendered_rows.push(box_draw_str(&HLINE.repeat(col.n_cols), cs));
+            rendered_rows.push(box_draw_str(&HLINE.repeat(col.n_cols + 1), cs));
         }
         rendered_rows.truncate(screen_rows);
 
