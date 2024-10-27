@@ -329,7 +329,7 @@ impl Windows {
                 return;
             }
             let win = self.cols.focus.wins.remove_focused_unchecked();
-            let mut col = Column::new(self.screen_rows, self.screen_cols, &[0]);
+            let mut col = Column::new(self.screen_rows, self.screen_cols, &[win.view.bufid]);
             col.wins.focus = win;
             self.cols.insert_at(Position::Head, col);
             self.cols.focus_up();
