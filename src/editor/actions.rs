@@ -554,6 +554,7 @@ where
                 self.windows
                     .open_virtual(filename, data, load_in_new_window);
             }
+
             _ => {
                 self.open_file(data, load_in_new_window);
                 if let Some(s) = attrs.get("addr") {

@@ -45,6 +45,12 @@ impl Windows {
         self.buffers.is_empty_scratch()
     }
 
+    fn buffer_is_visible(&self, id: BufferId) -> bool {
+        self.cols
+            .iter()
+            .any(|(_, c)| c.wins.iter().any(|(_, w)| w.view.bufid == id))
+    }
+
     pub(crate) fn active_buffer(&self) -> &Buffer {
         self.buffers.active()
     }
@@ -69,7 +75,14 @@ impl Windows {
         let opt = self.buffers.open_or_focus(path)?;
         let id = self.active_buffer().id;
 
-        if new_window {
+        if self.buffer_is_visible(id) {
+            self.cols
+                .focus_element_by(|c| c.wins.iter().any(|(_, w)| w.view.bufid == id));
+            self.cols
+                .focus
+                .wins
+                .focus_element_by(|w| w.view.bufid == id);
+        } else if new_window {
             self.show_buffer_in_new_window(id);
         } else {
             self.show_buffer_in_active_window(id);
@@ -316,19 +329,17 @@ impl Windows {
             col.wins.focus = win;
             self.cols.insert_at(Position::Head, col);
             self.cols.focus_up();
-        } else {
-            if self.cols.focus.wins.len() == 1 {
-                let on_left = self.cols.up.is_empty();
-                let win = self.cols.remove_focused_unchecked().wins.focus;
-                if !on_left {
-                    self.cols.focus_up();
-                }
-                self.cols.focus.wins.insert(win);
-            } else {
-                let win = self.cols.focus.wins.remove_focused_unchecked();
+        } else if self.cols.focus.wins.len() == 1 {
+            let on_left = self.cols.up.is_empty();
+            let win = self.cols.remove_focused_unchecked().wins.focus;
+            if !on_left {
                 self.cols.focus_up();
-                self.cols.focus.wins.insert(win);
             }
+            self.cols.focus.wins.insert(win);
+        } else {
+            let win = self.cols.focus.wins.remove_focused_unchecked();
+            self.cols.focus_up();
+            self.cols.focus.wins.insert(win);
         }
         self.update_screen_size(self.screen_rows, self.screen_cols);
     }
@@ -346,15 +357,13 @@ impl Windows {
             col.wins.focus = win;
             self.cols.insert_at(Position::Tail, col);
             self.cols.focus_down();
+        } else if self.cols.focus.wins.len() == 1 {
+            let win = self.cols.remove_focused_unchecked().wins.focus;
+            self.cols.focus.wins.insert(win);
         } else {
-            if self.cols.focus.wins.len() == 1 {
-                let win = self.cols.remove_focused_unchecked().wins.focus;
-                self.cols.focus.wins.insert(win);
-            } else {
-                let win = self.cols.focus.wins.remove_focused_unchecked();
-                self.cols.focus_down();
-                self.cols.focus.wins.insert(win);
-            }
+            let win = self.cols.focus.wins.remove_focused_unchecked();
+            self.cols.focus_down();
+            self.cols.focus.wins.insert(win);
         }
         self.update_screen_size(self.screen_rows, self.screen_cols);
     }

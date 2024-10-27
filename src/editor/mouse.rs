@@ -634,6 +634,20 @@ mod tests {
         &[];
         "middle click cancel with right"
     )]
+    #[test_case(
+        &[
+            MouseEvent { k: Press, m: NoMod, b: Left, x: 9, y: 0 },
+            MouseEvent { k: Release, m: NoMod, b: Left, x: 9, y: 0 },
+            MouseEvent { k: Press, m: NoMod, b: Left, x: 9, y: 0 },
+            MouseEvent { k: Release, m: NoMod, b: Left, x: 9, y: 0 },
+        ],
+        None,
+        "text",
+        "some text to test with\n",
+        "X",
+        &[];
+        "double left click"
+    )]
     #[test]
     fn mouse_interactions_work(
         evts: &[MouseEvent],
