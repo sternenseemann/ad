@@ -611,6 +611,7 @@ where
             if let Some(mut addr) = maybe_addr {
                 let b = self.windows.active_buffer_mut();
                 b.dot = b.map_addr(&mut addr);
+                self.windows.clamp_scroll();
                 self.handle_action(Action::SetViewPort(ViewPort::Center), Source::Fsys);
             }
         } else {
