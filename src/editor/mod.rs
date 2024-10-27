@@ -396,6 +396,8 @@ where
             LoadDot { new_window } => self.default_load_dot(source, new_window),
             MarkClean { bufid } => self.mark_clean(bufid),
             NewEditLogTransaction => self.windows.active_buffer_mut().new_edit_log_transaction(),
+            NewColumn => self.windows.new_column(),
+            NewWindow => self.windows.new_window(),
             NextBuffer => {
                 let id = self.windows.focus_next_buffer();
                 _ = self.tx_fsys.send(LogEvent::Focus(id));

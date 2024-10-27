@@ -73,6 +73,8 @@ pub enum Action {
     LoadDot { new_window: bool },
     MarkClean { bufid: usize },
     NewEditLogTransaction,
+    NewColumn,
+    NewWindow,
     NextBuffer,
     NextColumn,
     NextWindowInColumn,

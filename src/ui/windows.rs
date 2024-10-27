@@ -67,6 +67,11 @@ impl Windows {
         self.buffers.with_id_mut(id)
     }
 
+    fn focus_first_window_with_buffer(&mut self, id: BufferId) {
+        self.cols
+            .focus_element_by_mut(|c| c.wins.focus_element_by_mut(|w| w.view.bufid == id));
+    }
+
     pub(crate) fn open_or_focus<P: AsRef<Path>>(
         &mut self,
         path: P,
@@ -76,12 +81,7 @@ impl Windows {
         let id = self.active_buffer().id;
 
         if self.buffer_is_visible(id) {
-            self.cols
-                .focus_element_by(|c| c.wins.iter().any(|(_, w)| w.view.bufid == id));
-            self.cols
-                .focus
-                .wins
-                .focus_element_by(|w| w.view.bufid == id);
+            self.focus_first_window_with_buffer(id);
         } else if new_window {
             self.show_buffer_in_new_window(id);
         } else {
@@ -166,7 +166,11 @@ impl Windows {
 
     pub(crate) fn focus_id(&mut self, id: BufferId) {
         if let Some(id) = self.buffers.focus_id(id) {
-            self.show_buffer_in_active_window(id);
+            if self.buffer_is_visible(id) {
+                self.focus_first_window_with_buffer(id);
+            } else {
+                self.show_buffer_in_active_window(id);
+            }
         }
     }
 
@@ -414,6 +418,26 @@ impl Windows {
 
         swap(self.focused_view_mut(), &mut view);
         self.views.push(view);
+    }
+
+    /// Create a new column containing a single window showing the same view found in the
+    /// current active window.
+    pub(crate) fn new_column(&mut self) {
+        let view = self.focused_view().clone();
+        let mut col = Column::new(self.screen_rows, self.screen_cols, &[view.bufid]);
+        col.wins.last_mut().view = view;
+        self.cols.insert_at(Position::Tail, col);
+        self.update_screen_size(self.screen_rows, self.screen_cols);
+    }
+
+    /// Create a new window at the end of the current column showing the same view
+    /// found in the current active window.
+    pub(crate) fn new_window(&mut self) {
+        let view = self.focused_view().clone();
+        let wins = &mut self.cols.focus.wins;
+        wins.insert_at(Position::Tail, Window { n_rows: 0, view });
+        wins.focus_tail();
+        self.update_screen_size(self.screen_rows, self.screen_cols);
     }
 
     /// Set the currently focused window to contain the given buffer

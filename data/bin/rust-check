@@ -30,7 +30,7 @@ updateCargoOutput() {
   echo -en "\n\n>>>" | bufWrite "$1" body
   content="$(bufRead "$1" body)"
   if [[ "$content" =~ error|warning ]]; then
-    focusBuffer "$1"
+    # focusBuffer "$1"
     adEdit 'x/(.+):(\d+):(\d+):/ c/$1:$2:$3/'
   elif [[ "$TEST_BUTTON" = "$STOP_TESTS" ]]; then
     updateTestOutput "$1"
@@ -84,7 +84,7 @@ handleEvents() {
 
 currentId="$(currentBufferId)"
 root="$(git rev-parse --show-toplevel)"
-adCtl "open $root/+cargo"
+adCtl "open-in-new-window $root/+cargo"
 id="$(adIndex | grep "+cargo" | cut -f1)"
 focusBuffer "$currentId"
 updateCargoOutput "$id"

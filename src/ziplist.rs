@@ -474,18 +474,38 @@ impl<T> ZipList<T> {
 
     /// Focus the first element found matching the given predicate function.
     ///
-    /// If no matching elements are found, the ZipList will be left in
-    /// its original state.
-    pub fn focus_element_by<F>(&mut self, f: F)
+    /// Returns true if the focused element changed. If no matching elements are found,
+    /// the ZipList will be left in its original state and false is returned.
+    pub fn focus_element_by<F>(&mut self, f: F) -> bool
     where
         F: Fn(&T) -> bool,
     {
         for _ in 0..self.len() {
             if f(&self.focus) {
-                return;
+                return true;
             }
             self.focus_down();
         }
+
+        false
+    }
+
+    /// Focus the first element found matching the given predicate function.
+    ///
+    /// If no matching elements are found, the ZipList will be left in
+    /// its original state.
+    pub fn focus_element_by_mut<F>(&mut self, f: F) -> bool
+    where
+        F: Fn(&mut T) -> bool,
+    {
+        for _ in 0..self.len() {
+            if f(&mut self.focus) {
+                return true;
+            }
+            self.focus_down();
+        }
+
+        false
     }
 
     /// Swap the focused element with the one above, wrapping from top to bottom.
@@ -591,7 +611,7 @@ impl<T: PartialEq> ZipList<T> {
     /// If the requested element is not found, the ZipList will be left in
     /// its original state.
     pub fn focus_element(&mut self, t: &T) {
-        self.focus_element_by(|elem| elem == t)
+        self.focus_element_by(|elem| elem == t);
     }
 
     /// Remove an element from the stack.

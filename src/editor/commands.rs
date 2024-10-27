@@ -96,6 +96,9 @@ fn parse_command(input: &str, active_buffer_id: usize, cwd: &Path) -> Result<Act
             }
         }
 
+        "new-column" => Ok(Single(NewColumn)),
+        "new-window" => Ok(Single(NewWindow)),
+
         "pwd" => Ok(Single(SetStatusMessage {
             message: cwd.display().to_string(),
         })),
