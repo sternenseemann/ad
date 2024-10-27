@@ -84,7 +84,7 @@ handleEvents() {
 
 currentId="$(currentBufferId)"
 root="$(git rev-parse --show-toplevel)"
-adCtl "open $root/+cargo"
+adCtl "open-in-new-window $root/+cargo"
 id="$(adIndex | grep "+cargo" | cut -f1)"
 focusBuffer "$currentId"
 updateCargoOutput "$id"

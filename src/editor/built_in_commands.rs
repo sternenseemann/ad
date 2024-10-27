@@ -31,6 +31,24 @@ pub fn built_in_commands() -> Vec<(Vec<&'static str>, &'static str)> {
             "delete the active buffer discarding all pending changes",
         ),
         (
+            vec!["dc", "delete-column"],
+            "delete the active column so long as this would not exit the editor with unsaved changes",
+        ),
+        (
+            vec!["dc!", "delete-column!"],
+            "delete the active column discarding all pendings changes if this is the last column",
+        ),
+        (
+            vec!["dw", "delete-window"],
+            "delete the active window so long as this would not exit the editor with unsaved changes",
+        ),
+        (
+            vec!["dw!", "delete-window!"],
+            "delete the active window discarding all pendings changes if this is the last window",
+        ),
+        (vec!["new-window"], "clone the current window as a new window at the end of the focused column"),
+        (vec!["new-column"], "clone the current window as a new column"),
+        (
             vec!["echo"],
             "display the given string in the status line ('echo hello, world!')",
         ),
@@ -50,6 +68,10 @@ pub fn built_in_commands() -> Vec<(Vec<&'static str>, &'static str)> {
         (
             vec!["o", "open"],
             "open the given file path in a new buffer ('open README.md')",
+        ),
+        (
+            vec!["O", "open-in-new-window"],
+            "open the given file path in a new buffer placed in a new window ('open-in-new-window README.md')",
         ),
         (vec!["pwd"], "print the current editor working directory"),
         (

@@ -1,7 +1,8 @@
 use crate::{
     buffer::{Buffer, BufferKind, Cur},
     dot::TextObject,
-    editor::ViewPort,
+    ziplist,
+    ziplist::ZipList,
 };
 use ad_event::Source;
 use std::{
@@ -10,18 +11,18 @@ use std::{
     mem,
     path::Path,
 };
-use tracing::debug;
 
 const MAX_JUMPS: usize = 100;
 
-type BufferId = usize;
+/// An ID for a known Buffer
+pub type BufferId = usize;
 
 /// A non-empty vec of buffers where the active buffer is accessible and default
 /// buffers are inserted where needed to maintain invariants
 #[derive(Debug)]
 pub struct Buffers {
     next_id: BufferId,
-    inner: VecDeque<Buffer>,
+    inner: ZipList<Buffer>,
     jump_list: JumpList,
 }
 
@@ -35,7 +36,20 @@ impl Buffers {
     pub fn new() -> Self {
         Self {
             next_id: 1,
-            inner: vec![Buffer::new_unnamed(0, "")].into(),
+            inner: ziplist![Buffer::new_unnamed(0, "")],
+            jump_list: JumpList::default(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_stubbed(ids: &[usize]) -> Self {
+        Self {
+            next_id: ids.last().unwrap() + 1,
+            inner: ZipList::try_from_iter(
+                ids.iter()
+                    .map(|i| Buffer::new_virtual(*i, "".to_owned(), "".to_owned())),
+            )
+            .unwrap(),
             jump_list: JumpList::default(),
         }
     }
@@ -56,14 +70,18 @@ impl Buffers {
             return Ok(None);
         }
 
-        let idx = self.inner.iter().position(|b| match &b.kind {
-            BufferKind::File(p) | BufferKind::Directory(p) => p == &path,
-            _ => false,
-        });
+        let existing_id = self
+            .inner
+            .iter()
+            .find(|(_, b)| match &b.kind {
+                BufferKind::File(p) | BufferKind::Directory(p) => p == &path,
+                _ => false,
+            })
+            .map(|(_, b)| b.id);
 
-        if let Some(idx) = idx {
+        if let Some(existing_id) = existing_id {
             self.record_jump_position();
-            self.inner.swap(0, idx);
+            self.inner.focus_element_by(|b| b.id == existing_id);
             return Ok(None);
         }
 
@@ -73,7 +91,7 @@ impl Buffers {
 
         // Remove an empty scratch buffer if the user has now opened a file
         if self.is_empty_scratch() {
-            mem::swap(&mut self.inner[0], &mut b);
+            mem::swap(&mut self.inner.focus, &mut b);
         } else {
             self.record_jump_position();
             self.push_buffer(b);
@@ -83,47 +101,47 @@ impl Buffers {
     }
 
     pub fn next(&mut self) {
-        if !self.remove_head_buffer_if_virtual() {
-            self.inner.rotate_right(1);
-        }
+        self.inner.focus_down();
     }
 
     pub fn previous(&mut self) {
-        self.remove_head_buffer_if_virtual();
-        self.inner.rotate_left(1)
+        self.inner.focus_up();
     }
 
     pub fn close_buffer(&mut self, id: BufferId) {
-        self.inner.retain(|b| b.id != id);
+        let removed = self
+            .inner
+            .remove_where_with_default(|b| b.id == id, || Buffer::new_unnamed(self.next_id, ""));
         self.jump_list.clear_for_buffer(id);
 
-        if self.inner.is_empty() {
-            self.inner.push_back(Buffer::new_unnamed(self.next_id, ""));
+        if removed.is_some() {
             self.next_id += 1;
         }
     }
 
-    /// The bool returned here denotes wether we removed the head buffer or not
-    fn remove_head_buffer_if_virtual(&mut self) -> bool {
-        let is_virtual = matches!(self.inner[0].kind, BufferKind::Virtual(_));
-        if is_virtual {
-            debug!("removing virtual buffer");
-            let prev = self
-                .inner
-                .remove(0)
-                .expect("always have at least one buffer");
-            self.jump_list.clear_for_buffer(prev.id);
-        }
-
-        is_virtual
-    }
-
     fn push_buffer(&mut self, buf: Buffer) {
-        self.remove_head_buffer_if_virtual();
-        self.inner.push_front(buf);
+        self.inner.insert(buf);
     }
 
     pub(crate) fn open_virtual(&mut self, name: String, content: String) {
+        let existing_id = self
+            .inner
+            .iter()
+            .find(|(_, b)| match &b.kind {
+                BufferKind::Virtual(s) => s == &name,
+                _ => false,
+            })
+            .map(|(_, b)| b.id);
+
+        if let Some(id) = existing_id {
+            self.focus_id(id);
+            self.inner.focus.txt = content.into();
+            let n = self.inner.focus.txt.len_chars();
+            self.inner.focus.dot.clamp_idx(n);
+            self.inner.focus.xdot.clamp_idx(n);
+            return;
+        }
+
         let buf = Buffer::new_virtual(self.next_id, name, content);
         self.record_jump_position();
         self.push_buffer(buf);
@@ -131,16 +149,15 @@ impl Buffers {
     }
 
     /// Used to seed the buffer selection mini-buffer
-    pub(crate) fn as_buf_list(&self) -> Vec<String> {
-        let focused = self.inner[0].id;
+    pub(crate) fn as_buffer_list(&self) -> Vec<String> {
         let mut entries: Vec<String> = self
             .inner
             .iter()
-            .map(|b| {
+            .map(|(focused, b)| {
                 format!(
                     "{:<4} {} {}",
                     b.id,
-                    if b.id == focused { '*' } else { ' ' },
+                    if focused { '*' } else { ' ' },
                     b.full_name()
                 )
             })
@@ -150,94 +167,82 @@ impl Buffers {
         entries
     }
 
-    pub(crate) fn focus_id(&mut self, id: BufferId) {
-        if let Some(idx) = self.inner.iter().position(|b| b.id == id) {
-            self.record_jump_position();
-            self.inner.swap(0, idx);
+    pub(crate) fn contains_bufid(&self, id: BufferId) -> bool {
+        self.inner.iter().any(|(_, b)| b.id == id)
+    }
+
+    pub(crate) fn focus_id(&mut self, id: BufferId) -> Option<BufferId> {
+        if !self.contains_bufid(id) || self.active().id == id {
+            return None;
         }
+        self.record_jump_position();
+        self.inner.focus_element_by(|b| b.id == id);
+
+        Some(id)
     }
 
     /// Focus the given buffer ID without touching the jump list
     pub(crate) fn focus_id_silent(&mut self, id: BufferId) {
-        if let Some(idx) = self.inner.iter().position(|b| b.id == id) {
-            self.inner.swap(0, idx);
-        }
+        self.inner.focus_element_by(|b| b.id == id);
     }
 
     pub(crate) fn with_id(&self, id: BufferId) -> Option<&Buffer> {
-        self.inner.iter().find(|b| b.id == id)
+        self.inner.iter().find(|(_, b)| b.id == id).map(|(_, b)| b)
     }
 
     pub(crate) fn with_id_mut(&mut self, id: BufferId) -> Option<&mut Buffer> {
-        self.inner.iter_mut().find(|b| b.id == id)
+        self.inner
+            .iter_mut()
+            .find(|(_, b)| b.id == id)
+            .map(|(_, b)| b)
     }
 
     pub fn dirty_buffers(&self) -> Vec<String> {
         self.inner
             .iter()
-            .filter(|b| b.dirty && b.kind.is_file())
-            .map(|b| b.full_name().to_string())
+            .filter(|(_, b)| b.dirty && b.kind.is_file())
+            .map(|(_, b)| b.full_name().to_string())
             .collect()
     }
 
     #[inline]
     pub fn active(&self) -> &Buffer {
-        &self.inner[0]
+        &self.inner.focus
     }
 
     #[inline]
     pub fn active_mut(&mut self) -> &mut Buffer {
-        &mut self.inner[0]
+        &mut self.inner.focus
     }
 
     pub fn record_jump_position(&mut self) {
         self.jump_list
-            .push(self.inner[0].id, self.inner[0].dot.active_cur());
+            .push(self.inner.focus.id, self.inner.focus.dot.active_cur());
     }
 
-    fn jump(
-        &mut self,
-        bufid: BufferId,
-        cur: Cur,
-        screen_rows: usize,
-        screen_cols: usize,
-    ) -> Option<BufferId> {
-        let prev_id = self.inner[0].id;
-        self.remove_head_buffer_if_virtual();
-        if let Some(idx) = self.inner.iter().position(|b| b.id == bufid) {
-            self.inner.swap(0, idx);
-            self.inner[0].dot = cur.into();
-            self.inner[0].set_view_port(ViewPort::Center, screen_rows, screen_cols);
+    fn jump(&mut self, bufid: BufferId, cur: Cur) -> (BufferId, BufferId) {
+        let prev_id = self.inner.focus.id;
+        self.inner.focus_element_by(|b| b.id == bufid);
+        let new_id = self.inner.focus.id;
+        if new_id == bufid {
+            self.inner.focus.dot = cur.into();
         }
 
-        let new_id = self.inner[0].id;
-        if new_id != prev_id {
-            Some(new_id)
-        } else {
-            None
-        }
+        (prev_id, new_id)
     }
 
-    pub fn jump_list_forward(
-        &mut self,
-        screen_rows: usize,
-        screen_cols: usize,
-    ) -> Option<BufferId> {
+    pub fn jump_list_forward(&mut self) -> Option<(BufferId, BufferId)> {
         if let Some((bufid, cur)) = self.jump_list.forward() {
-            self.jump(bufid, cur, screen_rows, screen_cols)
+            Some(self.jump(bufid, cur))
         } else {
             None
         }
     }
 
-    pub fn jump_list_backward(
-        &mut self,
-        screen_rows: usize,
-        screen_cols: usize,
-    ) -> Option<BufferId> {
-        let (bufid, cur) = (self.inner[0].id, self.inner[0].dot.active_cur());
+    pub fn jump_list_backward(&mut self) -> Option<(BufferId, BufferId)> {
+        let (bufid, cur) = (self.inner.focus.id, self.inner.focus.dot.active_cur());
         if let Some((bufid, cur)) = self.jump_list.backward(bufid, cur) {
-            self.jump(bufid, cur, screen_rows, screen_cols)
+            Some(self.jump(bufid, cur))
         } else {
             None
         }
@@ -250,25 +255,30 @@ impl Buffers {
 
     #[inline]
     pub fn is_empty_scratch(&self) -> bool {
-        self.inner.len() == 1 && self.inner[0].is_unnamed() && self.inner[0].txt.is_empty()
+        self.inner.len() == 1 && self.inner.focus.is_unnamed() && self.inner.focus.txt.is_empty()
     }
 
     /// Append to the +output buffer assigned to the buffer with provided id.
-    pub(crate) fn write_output_for_buffer(&mut self, id: usize, s: String, cwd: &Path) {
+    pub(crate) fn write_output_for_buffer(
+        &mut self,
+        id: usize,
+        s: String,
+        cwd: &Path,
+    ) -> Option<BufferId> {
         let key = match self.with_id(id) {
             Some(b) => b.output_file_key(cwd),
             None => format!("{}/DEFAULT_OUTPUT_BUFFER", cwd.display()),
         };
 
-        let id = match self
+        match self
             .inner
             .iter_mut()
-            .find(|b| b.kind == BufferKind::Output(key.clone()))
+            .find(|(_, b)| b.kind == BufferKind::Output(key.clone()))
         {
-            Some(b) => {
+            Some((_, b)) => {
                 b.append(s, Source::Fsys);
 
-                b.id
+                None
             }
 
             None => {
@@ -276,13 +286,11 @@ impl Buffers {
                 self.next_id += 1;
                 let b = Buffer::new_output(id, key, s);
                 self.record_jump_position();
-                self.inner.push_front(b);
+                self.inner.insert(b);
 
-                id
+                Some(id)
             }
-        };
-
-        self.focus_id(id);
+        }
     }
 }
 
