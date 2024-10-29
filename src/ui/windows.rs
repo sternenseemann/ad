@@ -751,6 +751,7 @@ impl View {
     /// Clamp the current viewport to include the [Dot].
     pub(crate) fn clamp_scroll(&mut self, b: &mut Buffer, screen_rows: usize, screen_cols: usize) {
         let (y, x) = b.dot.active_cur().as_yx(b);
+        let (_, w_sgncol) = b.sign_col_dims();
         self.rx = self.rx_from_x(b, y, x);
         b.cached_rx = self.rx;
 
@@ -766,8 +767,8 @@ impl View {
             self.col_off = self.rx;
         }
 
-        if self.rx >= self.col_off + screen_cols {
-            self.col_off = self.rx - screen_cols + 1;
+        if self.rx >= self.col_off + screen_cols - w_sgncol {
+            self.col_off = self.rx - screen_cols + w_sgncol + 1;
         }
     }
 
