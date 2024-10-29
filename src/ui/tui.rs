@@ -265,7 +265,7 @@ impl Tui {
         if !msg.is_empty() && delta < status_timeout {
             let width = self.screen_cols - msg.len() - 10;
             buf.push_str(&format!(
-                "{}{}{msg}{pending:>width$}",
+                "{}{}{msg}{pending:>width$}          ",
                 Style::Fg(cs.fg),
                 Style::Bg(cs.bg)
             ));
@@ -313,10 +313,10 @@ impl Tui {
 
         lines.push(format!(
             "{}{}{}{}{}",
-            mb.prompt,
-            mb.input,
             Style::Fg(cs.fg),
             Style::Bg(cs.bg),
+            mb.prompt,
+            mb.input,
             Cursor::ClearRight
         ));
 
