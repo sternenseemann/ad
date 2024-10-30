@@ -297,7 +297,7 @@ pub trait Address: IterBoundedChars {
         };
 
         let mut dot = maybe_dot.unwrap_or_default();
-        dot.clamp_idx(self.len_chars());
+        dot.clamp_idx(self.max_iter());
 
         dot
     }

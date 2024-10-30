@@ -193,7 +193,7 @@ impl Program {
         }
 
         let (from, to) = initial_dot.as_char_indices();
-        let initial = &Match::synthetic(from, to + 1);
+        let initial = &Match::synthetic(from, to.saturating_add(1));
 
         ed.begin_edit_transaction();
         let (from, to) = self.step(ed, initial, 0, fname, out)?.as_char_indices();
