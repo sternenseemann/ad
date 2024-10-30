@@ -18,7 +18,7 @@ use crate::{
         windows::{Column, View, Window},
         StateChange, UserInterface, Windows,
     },
-    ORIGINAL_TERMIOS, VERSION,
+    ziplist, ORIGINAL_TERMIOS, VERSION,
 };
 use std::{
     cmp::min,
@@ -47,6 +47,11 @@ pub struct Tui {
     screen_cols: usize,
     status_message: String,
     last_status: Instant,
+    vstr: String,
+    xstr: String,
+    tstr: String,
+    hvh: String,
+    vh: String,
 }
 
 impl Default for Tui {
@@ -63,90 +68,32 @@ impl Drop for Tui {
 
 impl Tui {
     pub fn new() -> Self {
-        Self {
+        let mut tui = Self {
             stdout: stdout(),
             screen_rows: 0,
             screen_cols: 0,
             status_message: String::new(),
             last_status: Instant::now(),
-        }
+            vstr: String::new(),
+            tstr: String::new(),
+            xstr: String::new(),
+            hvh: String::new(),
+            vh: String::new(),
+        };
+        tui.update_box_elements();
+
+        tui
     }
 
-    /// Render the visible lines of b for the available View.
-    fn render_window(
-        &self,
-        b: &Buffer,
-        w: &Window,
-        n_cols: usize,
-        load_exec_range: Option<(bool, Range)>,
-        cs: &ColorScheme,
-    ) -> Vec<String> {
-        let mut lines = Vec::with_capacity(w.n_rows);
-        let (w_lnum, _) = b.sign_col_dims();
-
-        for y in 0..w.n_rows {
-            let file_row = y + w.view.row_off;
-
-            if file_row >= b.len_lines() {
-                let mut buf = format!(
-                    "{}{}~ {VLINE:>width$}{}",
-                    Style::Fg(cs.signcol_fg),
-                    Style::Bg(cs.bg),
-                    Style::Fg(cs.fg),
-                    width = w_lnum
-                );
-                let padding = n_cols - w_lnum - 2;
-                buf.push_str(&" ".repeat(padding));
-                lines.push(buf);
-            } else {
-                // +2 for the leading space and vline chars
-                let padding = w_lnum + 2;
-                lines.push(format!(
-                    "{}{} {:>width$}{VLINE}{}{}",
-                    Style::Fg(cs.signcol_fg),
-                    Style::Bg(cs.bg),
-                    file_row + 1,
-                    Style::Fg(cs.fg),
-                    styled_rline_unchecked(
-                        b,
-                        &w.view,
-                        file_row,
-                        padding,
-                        n_cols,
-                        load_exec_range,
-                        cs
-                    ),
-                    width = w_lnum
-                ));
-            }
-        }
-
-        lines
-    }
-
-    /// Render UI lines for each window in the column, including horizontal separators to
-    /// mark the boundaries between windows.
-    fn render_column(
-        &self,
-        col: &Column,
-        windows: &Windows,
-        load_exec_range: Option<(bool, Range)>,
-        screen_rows: usize,
-        cs: &ColorScheme,
-    ) -> Vec<String> {
-        let mut rendered_rows = Vec::with_capacity(screen_rows);
-
-        for (is_focus, win) in col.wins.iter() {
-            let rng = if is_focus { load_exec_range } else { None };
-            let b = windows
-                .buffer_with_id(win.view.bufid)
-                .expect("valid buffer id");
-            rendered_rows.extend(self.render_window(b, win, col.n_cols, rng, cs));
-            rendered_rows.push(box_draw_str(&HLINE.repeat(col.n_cols), cs));
-        }
-        rendered_rows.truncate(screen_rows);
-
-        rendered_rows
+    fn update_box_elements(&mut self) {
+        let cs = &config_handle!().colorscheme;
+        let vstr = box_draw_str(VLINE, cs);
+        let hstr = box_draw_str(HLINE, cs);
+        self.tstr = box_draw_str(TSTR, cs);
+        self.xstr = box_draw_str(XSTR, cs);
+        self.hvh = format!("{hstr}{vstr}{hstr}");
+        self.vh = format!("{vstr}{hstr}");
+        self.vstr = vstr;
     }
 
     fn render_banner(&self, screen_rows: usize, cs: &ColorScheme) -> Vec<String> {
@@ -180,48 +127,6 @@ impl Tui {
             }
             line.push_str(&format!("{}\r\n", Cursor::ClearRight));
             lines.push(line);
-        }
-
-        lines
-    }
-
-    fn render_windows(
-        &self,
-        windows: &Windows,
-        load_exec_range: Option<(bool, Range)>,
-        screen_rows: usize,
-        cs: &ColorScheme,
-    ) -> Vec<String> {
-        if windows.is_empty_scratch() {
-            return self.render_banner(screen_rows, cs);
-        }
-
-        let mut rendered_cols: Vec<Vec<String>> = windows
-            .cols
-            .iter()
-            .map(|(is_focus, col)| {
-                let rng = if is_focus { load_exec_range } else { None };
-                self.render_column(col, windows, rng, screen_rows, cs)
-            })
-            .collect();
-
-        let mut lines = Vec::with_capacity(screen_rows);
-        let vstr = box_draw_str(VLINE, cs);
-        let hstr = box_draw_str(HLINE, cs);
-        let xstr = box_draw_str(XSTR, cs);
-        let tstr = box_draw_str(TSTR, cs);
-        let hvh = format!("{hstr}{vstr}{hstr}");
-        let vh = format!("{vstr}{hstr}");
-
-        for _ in 0..screen_rows {
-            let mut line_fragments = Vec::with_capacity(rendered_cols.len() + 1);
-            for col in rendered_cols.iter_mut() {
-                line_fragments.push(col.remove(0));
-            }
-            let mut buf = line_fragments.join(&vstr);
-            buf = buf.replace(&hvh, &xstr).replace(&vh, &tstr);
-            buf.push_str(&format!("{}\r\n", Cursor::ClearRight));
-            lines.push(buf);
         }
 
         lines
@@ -363,11 +268,14 @@ impl UserInterface for Tui {
         clear_screen(&mut self.stdout);
     }
 
-    // TODO: handle the other state changes efficiently
     fn state_change(&mut self, change: StateChange) {
-        let StateChange::StatusMessage { msg } = change;
-        self.status_message = msg;
-        self.last_status = Instant::now();
+        match change {
+            StateChange::ConfigUpdated => self.update_box_elements(),
+            StateChange::StatusMessage { msg } => {
+                self.status_message = msg;
+                self.last_status = Instant::now();
+            }
+        }
     }
 
     fn refresh(
@@ -407,12 +315,18 @@ impl UserInterface for Tui {
         let mut lines = Vec::with_capacity(self.screen_rows + 2);
         lines.push(format!("{}{}", Cursor::Hide, Cursor::ToStart));
 
-        lines.append(&mut self.render_windows(
-            windows,
-            load_exec_range,
-            effective_screen_rows,
-            &cs,
-        ));
+        if windows.is_empty_scratch() {
+            lines.append(&mut self.render_banner(effective_screen_rows, &cs));
+        } else {
+            lines.extend(WinsIter::new(
+                windows,
+                load_exec_range,
+                effective_screen_rows,
+                self,
+                &cs,
+            ));
+        }
+
         lines.push(self.render_status_bar(&cs, mode_name, active_buffer));
 
         if w_minibuffer {
@@ -444,6 +358,202 @@ impl UserInterface for Tui {
             // but we might as well try
             die!("Unable to write to stdout: {e}");
         };
+    }
+}
+
+struct WinsIter<'a> {
+    col_iters: Vec<ColIter<'a>>,
+    buf: Vec<String>,
+    vstr: &'a str,
+    xstr: &'a str,
+    tstr: &'a str,
+    hvh: &'a str,
+    vh: &'a str,
+}
+
+impl<'a> WinsIter<'a> {
+    fn new(
+        windows: &'a Windows,
+        load_exec_range: Option<(bool, Range)>,
+        screen_rows: usize,
+        tui: &'a Tui,
+        cs: &'a ColorScheme,
+    ) -> Self {
+        let col_iters: Vec<_> = windows
+            .cols
+            .iter()
+            .map(|(is_focus, col)| {
+                let rng = if is_focus { load_exec_range } else { None };
+                ColIter::new(col, windows, rng, screen_rows, cs)
+            })
+            .collect();
+        let buf = Vec::with_capacity(col_iters.len());
+
+        Self {
+            col_iters,
+            buf,
+            vstr: &tui.vstr,
+            xstr: &tui.xstr,
+            tstr: &tui.tstr,
+            hvh: &tui.hvh,
+            vh: &tui.vh,
+        }
+    }
+}
+
+impl<'a> Iterator for WinsIter<'a> {
+    type Item = String;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.buf.clear();
+
+        for it in self.col_iters.iter_mut() {
+            self.buf.push(it.next()?);
+        }
+
+        let mut buf = self.buf.join(self.vstr);
+        buf = buf.replace(self.hvh, self.xstr).replace(self.vh, self.tstr);
+        buf.push_str(&format!("{}\r\n", Cursor::ClearRight));
+
+        Some(buf)
+    }
+}
+
+struct ColIter<'a> {
+    inner: ziplist::Iter<'a, Window>,
+    current: Option<WinIter<'a>>,
+    wins: &'a Windows,
+    cs: &'a ColorScheme,
+    load_exec_range: Option<(bool, Range)>,
+    screen_rows: usize,
+    n_cols: usize,
+    yielded: usize,
+}
+
+impl<'a> ColIter<'a> {
+    fn new(
+        col: &'a Column,
+        wins: &'a Windows,
+        load_exec_range: Option<(bool, Range)>,
+        screen_rows: usize,
+        cs: &'a ColorScheme,
+    ) -> Self {
+        ColIter {
+            inner: col.wins.iter(),
+            current: None,
+            wins,
+            cs,
+            load_exec_range,
+            screen_rows,
+            n_cols: col.n_cols,
+            yielded: 0,
+        }
+    }
+}
+
+impl<'a> ColIter<'a> {
+    fn next_win_iter(&mut self) -> Option<WinIter<'a>> {
+        let (is_focus, w) = self.inner.next()?;
+        let b = self
+            .wins
+            .buffer_with_id(w.view.bufid)
+            .expect("valid buffer id");
+
+        let (w_lnum, _) = b.sign_col_dims();
+        let rng = if is_focus { self.load_exec_range } else { None };
+
+        Some(WinIter {
+            y: 0,
+            w_lnum,
+            n_cols: self.n_cols,
+            b,
+            w,
+            cs: self.cs,
+            load_exec_range: rng,
+        })
+    }
+}
+
+impl<'a> Iterator for ColIter<'a> {
+    type Item = String;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current.is_none() {
+            self.current = Some(self.next_win_iter()?);
+        }
+
+        let next_line = self.current.as_mut()?.next();
+        if self.yielded == self.screen_rows {
+            return None;
+        }
+        self.yielded += 1;
+
+        match next_line {
+            Some(line) => Some(line),
+            None => {
+                self.current = None;
+                Some(box_draw_str(&HLINE.repeat(self.n_cols), self.cs))
+            }
+        }
+    }
+}
+
+struct WinIter<'a> {
+    y: usize,
+    w_lnum: usize,
+    n_cols: usize,
+    b: &'a Buffer,
+    w: &'a Window,
+    cs: &'a ColorScheme,
+    load_exec_range: Option<(bool, Range)>,
+}
+
+impl<'a> Iterator for WinIter<'a> {
+    type Item = String;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.y >= self.w.n_rows {
+            return None;
+        }
+        let file_row = self.y + self.w.view.row_off;
+        self.y += 1;
+
+        let line = if file_row >= self.b.len_lines() {
+            let mut buf = format!(
+                "{}{}~ {VLINE:>width$}{}",
+                Style::Fg(self.cs.signcol_fg),
+                Style::Bg(self.cs.bg),
+                Style::Fg(self.cs.fg),
+                width = self.w_lnum
+            );
+            let padding = self.n_cols - self.w_lnum - 2;
+            buf.push_str(&" ".repeat(padding));
+
+            buf
+        } else {
+            // +2 for the leading space and vline chars
+            let padding = self.w_lnum + 2;
+
+            format!(
+                "{}{} {:>width$}{VLINE}{}{}",
+                Style::Fg(self.cs.signcol_fg),
+                Style::Bg(self.cs.bg),
+                file_row + 1,
+                Style::Fg(self.cs.fg),
+                styled_rline_unchecked(
+                    self.b,
+                    &self.w.view,
+                    file_row,
+                    padding,
+                    self.n_cols,
+                    self.load_exec_range,
+                    self.cs
+                ),
+                width = self.w_lnum
+            )
+        };
+
+        Some(line)
     }
 }
 

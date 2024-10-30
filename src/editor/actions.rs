@@ -12,7 +12,7 @@ use crate::{
     plumb::{MatchOutcome, PlumbingMessage},
     replace_config,
     system::System,
-    ui::UserInterface,
+    ui::{StateChange, UserInterface},
     update_config,
     util::gen_help_docs,
 };
@@ -355,6 +355,7 @@ where
         info!("{msg}");
 
         self.set_status_message(&msg);
+        self.ui.state_change(StateChange::ConfigUpdated);
     }
 
     pub(super) fn reload_active_buffer(&mut self) {
@@ -367,6 +368,7 @@ where
         if let Err(msg) = update_config(input) {
             self.set_status_message(&msg);
         }
+        self.ui.state_change(StateChange::ConfigUpdated);
     }
 
     pub(super) fn set_mode(&mut self, name: &str) {

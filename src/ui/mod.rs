@@ -59,6 +59,8 @@ pub(crate) enum StateChange {
     // BufferModified { id: usize },
     // /// The dot for the given buffer has been updated
     // BufferDotUpdated { id: usize },
+    /// User level config has been modified in some way
+    ConfigUpdated,
     // /// The tag for the given buffer has been updated
     // TagModified { id: usize },
     /// A new status message has been set
