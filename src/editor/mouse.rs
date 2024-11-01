@@ -3,6 +3,7 @@ use crate::{
     config_handle,
     dot::{Dot, Range},
     editor::{Action, Editor},
+    fsys::LogEvent,
     key::{MouseButton, MouseEvent, MouseEventKind, MouseMod},
     system::System,
 };
@@ -79,6 +80,9 @@ where
 
                 let click_in_active_buffer = self.windows.set_dot_from_screen_coords(x, y);
                 let b = self.windows.active_buffer_mut();
+                if !click_in_active_buffer {
+                    _ = self.tx_fsys.send(LogEvent::Focus(b.id));
+                }
 
                 if self.last_click_was_left && click_in_active_buffer {
                     let delta = (self.last_click_time - last_click_time).as_millis();
@@ -119,14 +123,16 @@ where
 
             (Press, _, WheelUp) => {
                 self.last_click_was_left = false;
-                self.windows.focus_buffer_for_screen_coords(x, y);
+                let id = self.windows.focus_buffer_for_screen_coords(x, y);
                 self.windows.scroll_up();
+                _ = self.tx_fsys.send(LogEvent::Focus(id));
             }
 
             (Press, _, WheelDown) => {
                 self.last_click_was_left = false;
-                self.windows.focus_buffer_for_screen_coords(x, y);
+                let id = self.windows.focus_buffer_for_screen_coords(x, y);
                 self.windows.scroll_down();
+                _ = self.tx_fsys.send(LogEvent::Focus(id));
             }
 
             (Release, m, b) => {
@@ -166,7 +172,8 @@ where
 
     #[inline]
     fn click_from_button(&mut self, btn: MouseButton, x: usize, y: usize) -> Click {
-        let (_, cur) = self.windows.cur_from_screen_coords(x, y, true);
+        let (id, cur) = self.windows.cur_from_screen_coords(x, y, true);
+        _ = self.tx_fsys.send(LogEvent::Focus(id));
 
         Click::new(btn, Range::from_cursors(cur, cur, false))
     }
