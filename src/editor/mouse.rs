@@ -78,8 +78,8 @@ where
                     return;
                 }
 
-                let click_in_active_buffer = self.windows.set_dot_from_screen_coords(x, y);
-                let b = self.windows.active_buffer_mut();
+                let click_in_active_buffer = self.layout.set_dot_from_screen_coords(x, y);
+                let b = self.layout.active_buffer_mut();
                 if !click_in_active_buffer {
                     _ = self.tx_fsys.send(LogEvent::Focus(b.id));
                 }
@@ -109,29 +109,29 @@ where
                         return;
                     }
 
-                    let (bufid, cur) = self.windows.cur_from_screen_coords(x, y, false);
-                    if bufid != self.windows.active_buffer().id {
+                    let (bufid, cur) = self.layout.cur_from_screen_coords(x, y, false);
+                    if bufid != self.layout.active_buffer().id {
                         return;
                     }
                     click.selection.set_active_cursor(cur);
 
                     if click.btn == Left {
-                        self.windows.active_buffer_mut().dot = Dot::from(click.selection);
+                        self.layout.active_buffer_mut().dot = Dot::from(click.selection);
                     }
                 }
             }
 
             (Press, _, WheelUp) => {
                 self.last_click_was_left = false;
-                let id = self.windows.focus_buffer_for_screen_coords(x, y);
-                self.windows.scroll_up();
+                let id = self.layout.focus_buffer_for_screen_coords(x, y);
+                self.layout.scroll_up();
                 _ = self.tx_fsys.send(LogEvent::Focus(id));
             }
 
             (Press, _, WheelDown) => {
                 self.last_click_was_left = false;
-                let id = self.windows.focus_buffer_for_screen_coords(x, y);
-                self.windows.scroll_down();
+                let id = self.layout.focus_buffer_for_screen_coords(x, y);
+                self.layout.scroll_down();
                 _ = self.tx_fsys.send(LogEvent::Focus(id));
             }
 
@@ -151,7 +151,7 @@ where
                     return;
                 }
 
-                let (bufid, cur) = self.windows.cur_from_screen_coords(x, y, false);
+                let (bufid, cur) = self.layout.cur_from_screen_coords(x, y, false);
                 // Support releasing the mouse over a different window as actioning the selection
                 // as it was present in the active buffer
                 if bufid == self.active_buffer_id() {
@@ -172,7 +172,7 @@ where
 
     #[inline]
     fn click_from_button(&mut self, btn: MouseButton, x: usize, y: usize) -> Click {
-        let (id, cur) = self.windows.cur_from_screen_coords(x, y, true);
+        let (id, cur) = self.layout.cur_from_screen_coords(x, y, true);
         _ = self.tx_fsys.send(LogEvent::Focus(id));
 
         Click::new(btn, Range::from_cursors(cur, cur, false))
@@ -193,7 +193,7 @@ where
                         self.held_click = Some(click);
                     } else if !is_right && !click.cut_handled {
                         self.forward_action_to_active_buffer(Action::Delete, Source::Mouse);
-                        click.selection = self.windows.active_buffer().dot.as_range();
+                        click.selection = self.layout.active_buffer().dot.as_range();
                         click.cut_handled = true;
                         self.held_click = Some(click);
                     }
@@ -221,17 +221,17 @@ where
             // For Middle clicks, if there is also a range dot in the buffer then that is
             // used as an argument to the command being executed.
             if is_right {
-                self.windows.active_buffer_mut().dot = Dot::from(click.selection);
+                self.layout.active_buffer_mut().dot = Dot::from(click.selection);
                 self.default_load_dot(Source::Mouse, load_in_new_window);
             } else {
-                let dot = self.windows.active_buffer().dot;
-                self.windows.active_buffer_mut().dot = Dot::from(click.selection);
+                let dot = self.layout.active_buffer().dot;
+                self.layout.active_buffer_mut().dot = Dot::from(click.selection);
 
                 if dot.is_range() {
                     // Execute as if the click selection was dot then reset dot
-                    let arg = dot.content(self.windows.active_buffer()).trim().to_string();
+                    let arg = dot.content(self.layout.active_buffer()).trim().to_string();
                     self.default_execute_dot(Some((dot.as_range(), arg)), Source::Mouse);
-                    self.windows.active_buffer_mut().dot = dot;
+                    self.layout.active_buffer_mut().dot = dot;
                 } else {
                     self.default_execute_dot(None, Source::Mouse);
                 }
@@ -241,12 +241,12 @@ where
             // set the buffer dot to the click location if it is outside of the current buffer
             // dot (and allow smart expand to handle generating the selection) before we Load/Execute
             if !self
-                .windows
+                .layout
                 .active_buffer()
                 .dot
                 .contains(&click.selection.start)
             {
-                self.windows.active_buffer_mut().dot = Dot::from(click.selection.start);
+                self.layout.active_buffer_mut().dot = Dot::from(click.selection.start);
             }
 
             if is_right {
@@ -674,9 +674,9 @@ mod tests {
             },
         );
         ed.update_window_size(100, 80); // Needed in order to keep clicks in bounds
-        ed.windows
+        ed.layout
             .open_virtual("test", "some text to test with", false);
-        ed.windows.active_buffer_mut().dot = Dot::Cur { c: Cur { idx: 5 } };
+        ed.layout.active_buffer_mut().dot = Dot::Cur { c: Cur { idx: 5 } };
 
         // attach an input filter so we can intercept load and execute events
         let (tx, rx) = channel();
@@ -688,7 +688,7 @@ mod tests {
         }
 
         let recvd_fsys_events: Vec<_> = rx.try_iter().collect();
-        let b = ed.windows.active_buffer();
+        let b = ed.layout.active_buffer();
 
         assert_eq!(ed.held_click, click, "click");
         assert_eq!(b.dot.content(b), dot, "dot content");
@@ -696,4 +696,9 @@ mod tests {
         assert_eq!(ed.system.clipboard, clipboard, "clipboard content");
         assert_eq!(fsys_events, &recvd_fsys_events, "fsys events");
     }
+
+    // TODO:
+    //   - test that each mouse click and scroll informs fsys that the appropriate
+    //     window is focused
+    //   - test that focus events aren't sent when they aren't needed
 }

@@ -11,11 +11,11 @@ use std::{cmp::min, io, mem::swap, path::Path};
 use tracing::debug;
 use unicode_width::UnicodeWidthChar;
 
-/// Windows is a screen layout of the windows available for displaying buffer
+/// Layout is a screen layout of the windows available for displaying buffer
 /// content to the user. The available screen space is split into a number of
 /// columns each containing a vertical stack of windows.
 #[derive(Debug)]
-pub(crate) struct Windows {
+pub(crate) struct Layout {
     buffers: Buffers,
     /// Available screen width in terms of characters
     pub(crate) screen_rows: usize,
@@ -27,7 +27,7 @@ pub(crate) struct Windows {
     pub(super) views: Vec<View>,
 }
 
-impl Windows {
+impl Layout {
     pub(crate) fn new(screen_rows: usize, screen_cols: usize) -> Self {
         let buffers = Buffers::new();
         let id = buffers.active().id;
@@ -350,7 +350,7 @@ impl Windows {
 
     /// Drag the focused window to the column on the right.
     ///
-    /// See [Windows::drag_left] for semantics.
+    /// See [Layout::drag_left] for semantics.
     pub(crate) fn drag_right(&mut self) {
         if self.cols.len() == 1 || self.cols.down.is_empty() {
             if self.cols.focus.wins.len() == 1 {
@@ -678,7 +678,7 @@ impl Column {
         }
     }
 
-    /// Needed to avoid borrowing all of Windows when calling [Windows::focused_view_mut].
+    /// Needed to avoid borrowing all of Layout when calling [Layout::focused_view_mut].
     #[inline]
     fn focused_view_mut(&mut self) -> &mut View {
         &mut self.wins.focus.view
@@ -818,7 +818,7 @@ mod tests {
     };
     use simple_test_case::test_case;
 
-    fn test_windows(col_wins: &[usize], n_rows: usize, n_cols: usize) -> Windows {
+    fn test_windows(col_wins: &[usize], n_rows: usize, n_cols: usize) -> Layout {
         let mut cols = Vec::with_capacity(col_wins.len());
         let mut n = 0;
         let mut all_ids = Vec::new();
@@ -830,7 +830,7 @@ mod tests {
             all_ids.extend(ids);
         }
 
-        let mut ws = Windows {
+        let mut ws = Layout {
             buffers: Buffers::new_stubbed(&all_ids),
             screen_rows: n_rows,
             screen_cols: n_cols,
@@ -842,7 +842,7 @@ mod tests {
         ws
     }
 
-    fn ordered_window_ids(ws: &Windows) -> Vec<usize> {
+    fn ordered_window_ids(ws: &Layout) -> Vec<usize> {
         ws.cols
             .iter()
             .flat_map(|(_, c)| c.wins.iter().map(|(_, w)| w.view.bufid))

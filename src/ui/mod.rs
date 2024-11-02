@@ -7,11 +7,11 @@ use crate::{
 };
 use std::sync::mpsc::Sender;
 
+mod layout;
 mod tui;
-mod windows;
 
+pub(crate) use layout::Layout;
 pub use tui::Tui;
-pub(crate) use windows::Windows;
 
 pub(crate) trait UserInterface {
     /// Initialise the UI and start processing events.
@@ -29,7 +29,7 @@ pub(crate) trait UserInterface {
     fn refresh(
         &mut self,
         mode_name: &str,
-        windows: &Windows,
+        windows: &Layout,
         pending_keys: &[Input],
         held_click: Option<&Click>,
         mb: Option<MiniBufferState<'_>>,
@@ -107,7 +107,7 @@ impl UserInterface for Ui {
     fn refresh(
         &mut self,
         mode_name: &str,
-        windows: &Windows,
+        windows: &Layout,
         pending_keys: &[Input],
         held_click: Option<&Click>,
         mb: Option<MiniBufferState<'_>>,

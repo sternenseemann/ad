@@ -13,7 +13,7 @@ use crate::{
     set_config,
     system::{DefaultSystem, System},
     term::CurShape,
-    ui::{StateChange, Ui, UserInterface, Windows},
+    ui::{Layout, StateChange, Ui, UserInterface},
     LogBuffer,
 };
 use ad_event::Source;
@@ -57,7 +57,7 @@ where
     running: bool,
     modes: Vec<Mode>,
     pending_keys: Vec<Input>,
-    windows: Windows,
+    layout: Layout,
     tx_events: Sender<Event>,
     rx_events: Receiver<Event>,
     tx_fsys: Sender<LogEvent>,
@@ -109,7 +109,7 @@ where
             running: true,
             modes: modes(),
             pending_keys: Vec::new(),
-            windows: Windows::new(0, 0),
+            layout: Layout::new(0, 0),
             tx_events,
             rx_events,
             tx_fsys,
@@ -125,20 +125,19 @@ where
     /// The id of the currently active buffer
     #[inline]
     pub fn active_buffer_id(&self) -> usize {
-        self.windows.active_buffer().id
+        self.layout.active_buffer().id
     }
 
     /// Update the stored window size, accounting for the status and message bars
     /// This will panic if the available screen rows are 0 or 1
     pub(crate) fn update_window_size(&mut self, screen_rows: usize, screen_cols: usize) {
         trace!("window size updated: rows={screen_rows} cols={screen_cols}");
-        self.windows
-            .update_screen_size(screen_rows - 2, screen_cols);
+        self.layout.update_screen_size(screen_rows - 2, screen_cols);
     }
 
     /// Ensure that opening without any files initialises the fsys state correctly
     fn ensure_correct_fsys_state(&self) {
-        if self.windows.is_empty_scratch() {
+        if self.layout.is_empty_scratch() {
             _ = self.tx_fsys.send(LogEvent::Open(0));
             _ = self.tx_fsys.send(LogEvent::Focus(0));
         }
@@ -163,10 +162,10 @@ where
     }
 
     pub(super) fn refresh_screen_w_minibuffer(&mut self, mb: Option<MiniBufferState<'_>>) {
-        self.windows.clamp_scroll();
+        self.layout.clamp_scroll();
         self.ui.refresh(
             &self.modes[0].name,
-            &self.windows,
+            &self.layout,
             &self.pending_keys,
             self.held_click.as_ref(),
             mb,
@@ -219,7 +218,7 @@ where
         tx: Sender<Result<String, String>>,
         f: fn(&Buffer) -> String,
     ) {
-        match self.windows.buffer_with_id(id) {
+        match self.layout.buffer_with_id(id) {
             Some(b) => _ = tx.send(Ok((f)(b))),
             None => {
                 _ = tx.send(Err("unknown buffer".to_string()));
@@ -235,7 +234,7 @@ where
         s: String,
         f: F,
     ) {
-        match self.windows.buffer_with_id_mut(id) {
+        match self.layout.buffer_with_id_mut(id) {
             Some(b) => {
                 (f)(b, s);
                 _ = tx.send(Ok("handled".to_string()))
@@ -308,7 +307,7 @@ where
             }),
 
             AppendOutput { id, s } => {
-                self.windows.write_output_for_buffer(id, s, &self.cwd, true);
+                self.layout.write_output_for_buffer(id, s, &self.cwd, true);
                 default_handled();
             }
 
@@ -365,7 +364,7 @@ where
 
         match action {
             AppendToOutputBuffer { bufid, content } => self
-                .windows
+                .layout
                 .write_output_for_buffer(bufid, content, &self.cwd, true),
             ChangeDirectory { path } => self.change_directory(path),
             CommandMode => self.command_mode(),
@@ -374,16 +373,16 @@ where
             DeleteWindow { force } => self.delete_active_window(force),
             DragWindow {
                 direction: Arrow::Up,
-            } => self.windows.drag_up(),
+            } => self.layout.drag_up(),
             DragWindow {
                 direction: Arrow::Down,
-            } => self.windows.drag_down(),
+            } => self.layout.drag_down(),
             DragWindow {
                 direction: Arrow::Left,
-            } => self.windows.drag_left(),
+            } => self.layout.drag_left(),
             DragWindow {
                 direction: Arrow::Right,
-            } => self.windows.drag_right(),
+            } => self.layout.drag_right(),
             EditCommand { cmd } => self.execute_edit_command(&cmd),
             ExecuteDot => self.default_execute_dot(None, source),
             Exit { force } => self.exit(force),
@@ -395,20 +394,20 @@ where
             JumpListBack => self.jump_backward(),
             LoadDot { new_window } => self.default_load_dot(source, new_window),
             MarkClean { bufid } => self.mark_clean(bufid),
-            NewEditLogTransaction => self.windows.active_buffer_mut().new_edit_log_transaction(),
-            NewColumn => self.windows.new_column(),
-            NewWindow => self.windows.new_window(),
+            NewEditLogTransaction => self.layout.active_buffer_mut().new_edit_log_transaction(),
+            NewColumn => self.layout.new_column(),
+            NewWindow => self.layout.new_window(),
             NextBuffer => {
-                let id = self.windows.focus_next_buffer();
+                let id = self.layout.focus_next_buffer();
                 _ = self.tx_fsys.send(LogEvent::Focus(id));
             }
             NextColumn => {
-                self.windows.next_column();
+                self.layout.next_column();
                 let id = self.active_buffer_id();
                 _ = self.tx_fsys.send(LogEvent::Focus(id));
             }
             NextWindowInColumn => {
-                self.windows.next_window_in_column();
+                self.layout.next_window_in_column();
                 let id = self.active_buffer_id();
                 _ = self.tx_fsys.send(LogEvent::Focus(id));
             }
@@ -416,16 +415,16 @@ where
             OpenFileInNewWindow { path } => self.open_file_relative_to_cwd(&path, true),
             Paste => self.paste_from_clipboard(source),
             PreviousBuffer => {
-                let id = self.windows.focus_previous_buffer();
+                let id = self.layout.focus_previous_buffer();
                 _ = self.tx_fsys.send(LogEvent::Focus(id));
             }
             PreviousColumn => {
-                self.windows.prev_column();
+                self.layout.prev_column();
                 let id = self.active_buffer_id();
                 _ = self.tx_fsys.send(LogEvent::Focus(id));
             }
             PreviousWindowInColumn => {
-                self.windows.prev_window_in_column();
+                self.layout.prev_window_in_column();
                 let id = self.active_buffer_id();
                 _ = self.tx_fsys.send(LogEvent::Focus(id));
             }
@@ -440,14 +439,14 @@ where
             SelectBuffer => self.select_buffer(),
             SetMode { m } => self.set_mode(m),
             SetStatusMessage { message } => self.set_status_message(&message),
-            SetViewPort(vp) => self.windows.set_viewport(vp),
+            SetViewPort(vp) => self.layout.set_viewport(vp),
             ShellPipe { cmd } => self.pipe_dot_through_shell_cmd(&cmd),
             ShellReplace { cmd } => self.replace_dot_with_shell_cmd(&cmd),
             ShellRun { cmd } => self.run_shell_cmd(&cmd),
             ShowHelp => self.show_help(),
             UpdateConfig { input } => self.update_config(&input),
             ViewLogs => self.view_logs(),
-            Yank => self.set_clipboard(self.windows.active_buffer().dot_contents()),
+            Yank => self.set_clipboard(self.layout.active_buffer().dot_contents()),
 
             DebugBufferContents => self.debug_buffer_contents(),
             DebugEditLog => self.debug_edit_log(),
@@ -460,7 +459,7 @@ where
                 };
 
                 self.forward_action_to_active_buffer(
-                    DotSet(TextObject::Arr(arr), self.windows.active_window_rows()),
+                    DotSet(TextObject::Arr(arr), self.layout.active_window_rows()),
                     Source::Keyboard,
                 );
             }
@@ -473,19 +472,19 @@ where
     }
 
     fn jump_forward(&mut self) {
-        if let Some(id) = self.windows.jump_forward() {
+        if let Some(id) = self.layout.jump_forward() {
             _ = self.tx_fsys.send(LogEvent::Focus(id));
         }
     }
 
     fn jump_backward(&mut self) {
-        if let Some(id) = self.windows.jump_backward() {
+        if let Some(id) = self.layout.jump_backward() {
             _ = self.tx_fsys.send(LogEvent::Focus(id));
         }
     }
 
     fn forward_action_to_active_buffer(&mut self, a: Action, source: Source) {
-        if let Some(o) = self.windows.active_buffer_mut().handle_action(a, source) {
+        if let Some(o) = self.layout.active_buffer_mut().handle_action(a, source) {
             match o {
                 ActionOutcome::SetStatusMessage(msg) => self.set_status_message(&msg),
                 ActionOutcome::SetClipboard(s) => self.set_clipboard(s),
@@ -495,7 +494,7 @@ where
 
     /// Returns `true` if the filter was successfully set, false if there was already one in place.
     pub(crate) fn try_set_input_filter(&mut self, bufid: usize, filter: InputFilter) -> bool {
-        let b = match self.windows.buffer_with_id_mut(bufid) {
+        let b = match self.layout.buffer_with_id_mut(bufid) {
             Some(b) => b,
             None => return false,
         };
@@ -512,7 +511,7 @@ where
 
     /// Remove the input filter for the given scope if one exists.
     pub(crate) fn clear_input_filter(&mut self, bufid: usize) {
-        if let Some(b) = self.windows.buffer_with_id_mut(bufid) {
+        if let Some(b) = self.layout.buffer_with_id_mut(bufid) {
             b.input_filter = None;
         }
     }

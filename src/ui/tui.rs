@@ -15,8 +15,8 @@ use crate::{
     },
     term::{Cursor, Style},
     ui::{
-        windows::{Column, View, Window},
-        StateChange, UserInterface, Windows,
+        layout::{Column, View, Window},
+        Layout, StateChange, UserInterface,
     },
     ziplist, ORIGINAL_TERMIOS, VERSION,
 };
@@ -281,7 +281,7 @@ impl UserInterface for Tui {
     fn refresh(
         &mut self,
         mode_name: &str,
-        windows: &Windows,
+        windows: &Layout,
         pending_keys: &[Input],
         held_click: Option<&Click>,
         mb: Option<MiniBufferState<'_>>,
@@ -373,7 +373,7 @@ struct WinsIter<'a> {
 
 impl<'a> WinsIter<'a> {
     fn new(
-        windows: &'a Windows,
+        windows: &'a Layout,
         load_exec_range: Option<(bool, Range)>,
         screen_rows: usize,
         tui: &'a Tui,
@@ -422,7 +422,7 @@ impl<'a> Iterator for WinsIter<'a> {
 struct ColIter<'a> {
     inner: ziplist::Iter<'a, Window>,
     current: Option<WinIter<'a>>,
-    wins: &'a Windows,
+    wins: &'a Layout,
     cs: &'a ColorScheme,
     load_exec_range: Option<(bool, Range)>,
     screen_rows: usize,
@@ -433,7 +433,7 @@ struct ColIter<'a> {
 impl<'a> ColIter<'a> {
     fn new(
         col: &'a Column,
-        wins: &'a Windows,
+        wins: &'a Layout,
         load_exec_range: Option<(bool, Range)>,
         screen_rows: usize,
         cs: &'a ColorScheme,
