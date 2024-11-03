@@ -1,10 +1,5 @@
 //! A minimal config file format for ad
-use crate::{
-    key::Input,
-    mode::normal_mode,
-    term::Color,
-    trie::Trie,
-};
+use crate::{key::Input, mode::normal_mode, term::Color, trie::Trie};
 use std::{env, fs, io};
 
 /// Editor level configuration
@@ -269,13 +264,11 @@ map G G => my-prog
     #[test]
     fn parse_of_example_config_works() {
         let cfg = Config::parse(EXAMPLE_CONFIG).unwrap();
-        let bindings: BTreeMap<Vec<Input>, String> = [
+        let bindings = Trie::from_pairs(vec![
             (vec![Input::Char(' '), Input::Char('F')], "fmt".to_string()),
             (vec![Input::Char('>')], "indent".to_string()),
             (vec![Input::Char('<')], "unindent".to_string()),
-        ]
-        .into_iter()
-        .collect();
+        ]);
 
         let expected = Config {
             bindings,
@@ -293,12 +286,10 @@ map G G => my-prog
             tabstop: 7,
             expand_tab: false,
             match_indent: false,
-            bindings: [(
+            bindings: Trie::from_pairs(vec![(
                 vec![Input::Char('G'), Input::Char('G')],
                 "my-prog".to_string(),
-            )]
-            .into_iter()
-            .collect(),
+            )]),
             ..Default::default()
         };
 
