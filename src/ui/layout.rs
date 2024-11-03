@@ -427,6 +427,7 @@ impl Layout {
         let mut col = Column::new(self.screen_rows, self.screen_cols, &[view.bufid]);
         col.wins.last_mut().view = view;
         self.cols.insert_at(Position::Tail, col);
+        self.cols.focus_tail();
         self.update_screen_size(self.screen_rows, self.screen_cols);
     }
 
