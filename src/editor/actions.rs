@@ -61,6 +61,7 @@ pub enum Action {
     DragWindow { direction: Arrow },
     EditCommand { cmd: String },
     ExecuteDot,
+    ExecuteString { s: String },
     Exit { force: bool },
     ExpandDot,
     FindFile { new_window: bool },

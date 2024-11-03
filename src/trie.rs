@@ -8,7 +8,7 @@ use std::{cmp, fmt};
 /// existing in the same Try.
 ///
 /// There are convenience methods provided for `Trie<char, V>` for when &str values are used as keys.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Trie<K, V>
 where
     K: Clone + PartialEq,
@@ -197,6 +197,19 @@ impl<V> From<QueryResult<V>> for Option<V> {
         match q {
             QueryResult::Val(v) => Some(v),
             _ => None,
+        }
+    }
+}
+
+impl<V> QueryResult<V> {
+    pub fn map<F, U>(self, f: F) -> QueryResult<U>
+    where
+        F: Fn(V) -> U,
+    {
+        match self {
+            Self::Val(v) => QueryResult::Val(f(v)),
+            Self::Partial => QueryResult::Partial,
+            Self::Missing => QueryResult::Missing,
         }
     }
 }

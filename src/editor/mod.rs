@@ -385,6 +385,7 @@ where
             } => self.layout.drag_right(),
             EditCommand { cmd } => self.execute_edit_command(&cmd),
             ExecuteDot => self.default_execute_dot(None, source),
+            ExecuteString { s } => self.execute_explicit_string(self.active_buffer_id(), s, source),
             Exit { force } => self.exit(force),
             ExpandDot => self.expand_current_dot(),
             FindFile { new_window } => self.find_file(new_window),

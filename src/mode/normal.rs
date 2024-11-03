@@ -149,7 +149,7 @@ pub(crate) fn normal_mode() -> Mode {
             config_handle!()
                 .bindings
                 .get(keys)
-                .map(|prog| Actions::Single(ShellRun { cmd: prog.clone() }))
+                .map(|s| Actions::Single(ExecuteString { s: s.clone() }))
         },
     }
 }

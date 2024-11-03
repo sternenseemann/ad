@@ -22,7 +22,7 @@ pub(crate) struct Mode {
     pub(crate) name: String,
     pub(crate) cur_shape: CurShape,
     pub(crate) keymap: Trie<Input, Actions>,
-    handle_expired_pending: fn(&[Input]) -> Option<Actions>,
+    handle_expired_pending: fn(&[Input]) -> QueryResult<Actions>,
 }
 
 impl fmt::Display for Mode {
@@ -36,8 +36,8 @@ impl Mode {
         Mode {
             name: name.to_string(),
             cur_shape: CurShape::Block,
-            keymap: Trie::from_pairs(vec![]),
-            handle_expired_pending: |_| None,
+            keymap: Trie::from_pairs(Vec::new()),
+            handle_expired_pending: |_| QueryResult::Missing,
         }
     }
 
@@ -50,9 +50,17 @@ impl Mode {
             QueryResult::Partial => None,
             QueryResult::Missing => {
                 let res = (self.handle_expired_pending)(keys);
-                keys.clear();
-
-                res
+                match res {
+                    QueryResult::Val(outcome) => {
+                        keys.clear();
+                        Some(outcome)
+                    }
+                    QueryResult::Missing => {
+                        keys.clear();
+                        None
+                    }
+                    QueryResult::Partial => None,
+                }
             }
         }
     }

@@ -6,6 +6,7 @@ use crate::{
     keymap,
     mode::Mode,
     term::CurShape,
+    trie::QueryResult,
 };
 
 pub(crate) fn insert_mode() -> Mode {
@@ -38,7 +39,7 @@ pub(crate) fn insert_mode() -> Mode {
         cur_shape: CurShape::Bar,
         keymap,
         handle_expired_pending: |keys| {
-            Some(if keys.len() == 1 {
+            QueryResult::Val(if keys.len() == 1 {
                 Actions::Single(RawInput { i: keys[0] })
             } else {
                 Actions::Multi(keys.iter().map(|&i| RawInput { i }).collect())

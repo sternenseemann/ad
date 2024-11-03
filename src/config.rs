@@ -1,6 +1,11 @@
 //! A minimal config file format for ad
-use crate::{key::Input, mode::normal_mode, term::Color};
-use std::{collections::BTreeMap, env, fs, io};
+use crate::{
+    key::Input,
+    mode::normal_mode,
+    term::Color,
+    trie::Trie,
+};
+use std::{env, fs, io};
 
 /// Editor level configuration
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,7 +19,7 @@ pub struct Config {
     pub(crate) minibuffer_lines: usize,
     pub(crate) find_command: String,
     pub(crate) colorscheme: ColorScheme,
-    pub(crate) bindings: BTreeMap<Vec<Input>, String>,
+    pub(crate) bindings: Trie<Input, String>,
 }
 
 impl Default for Config {
@@ -29,7 +34,7 @@ impl Default for Config {
             minibuffer_lines: 8,
             find_command: "fd -t f".to_string(),
             colorscheme: ColorScheme::default(),
-            bindings: BTreeMap::new(),
+            bindings: Trie::from_pairs(Vec::new()),
         }
     }
 }
@@ -105,6 +110,8 @@ impl Config {
     }
 
     pub(crate) fn update_from(&mut self, input: &str) -> Result<(), String> {
+        let mut raw_bindings = Vec::new();
+
         for line in input.lines() {
             let line = line.trim_end();
             if line.starts_with('#') || line.is_empty() {
@@ -114,7 +121,7 @@ impl Config {
             match line.strip_prefix("set ") {
                 Some(line) => self.try_set_prop(line)?,
                 None => match line.strip_prefix("map ") {
-                    Some(line) => self.try_add_mapping(line)?,
+                    Some(line) => raw_bindings.push(try_parse_binding(line)?),
                     None => {
                         return Err(format!(
                             "'{line}' should be 'set prop=val' or 'map ... => prog'"
@@ -124,11 +131,11 @@ impl Config {
             }
         }
 
-        if !self.bindings.is_empty() {
+        if !raw_bindings.is_empty() {
             // Make sure that none of the user provided bindings clash with Normal mode
             // bindings as that will mean they never get run
             let nm = normal_mode();
-            for keys in self.bindings.keys() {
+            for (keys, _) in raw_bindings.iter() {
                 if nm.keymap.contains_key_or_prefix(keys) {
                     let mut s = String::new();
                     for k in keys {
@@ -141,6 +148,8 @@ impl Config {
                 }
             }
         }
+
+        self.bindings = Trie::from_pairs(raw_bindings);
 
         Ok(())
     }
@@ -186,35 +195,6 @@ impl Config {
 
         Ok(())
     }
-
-    pub(crate) fn try_add_mapping(&mut self, input: &str) -> Result<(), String> {
-        let (keys, prog) = input
-            .split_once("=>")
-            .ok_or_else(|| format!("'{input}' is not a 'map ... => prog' statement"))?;
-
-        let keys: Vec<Input> = keys
-            .split_whitespace()
-            .filter_map(|s| {
-                if s.len() == 1 {
-                    let c = s.chars().next().unwrap();
-                    if c.is_whitespace() {
-                        None
-                    } else {
-                        Some(Input::Char(c))
-                    }
-                } else {
-                    match s {
-                        "<space>" => Some(Input::Char(' ')),
-                        _ => None,
-                    }
-                }
-            })
-            .collect();
-
-        self.bindings.insert(keys, prog.trim().to_string());
-
-        Ok(())
-    }
 }
 
 fn parse_usize(prop: &str, val: &str) -> Result<usize, String> {
@@ -237,6 +217,33 @@ fn parse_bool(prop: &str, val: &str) -> Result<bool, String> {
 fn parse_color(prop: &str, val: &str) -> Result<Color, String> {
     Color::try_from(val)
         .map_err(|_| format!("expected #RRGGBB string for '{prop}' but found '{val}'"))
+}
+
+fn try_parse_binding(input: &str) -> Result<(Vec<Input>, String), String> {
+    let (keys, prog) = input
+        .split_once("=>")
+        .ok_or_else(|| format!("'{input}' is not a 'map ... => prog' statement"))?;
+
+    let keys: Vec<Input> = keys
+        .split_whitespace()
+        .filter_map(|s| {
+            if s.len() == 1 {
+                let c = s.chars().next().unwrap();
+                if c.is_whitespace() {
+                    None
+                } else {
+                    Some(Input::Char(c))
+                }
+            } else {
+                match s {
+                    "<space>" => Some(Input::Char(' ')),
+                    _ => None,
+                }
+            }
+        })
+        .collect();
+
+    Ok((keys, prog.trim().to_string()))
 }
 
 #[cfg(test)]
