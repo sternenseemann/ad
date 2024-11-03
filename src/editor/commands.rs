@@ -27,6 +27,10 @@ fn parse_command(input: &str, active_buffer_id: usize, cwd: &Path) -> Result<Act
         },
         "bn" | "buffer-next" => Ok(Single(NextBuffer)),
         "bp" | "buffer-prev" => Ok(Single(PreviousBuffer)),
+        "next-column" => Ok(Single(NextColumn)),
+        "next-window" => Ok(Single(NextWindowInColumn)),
+        "prev-column" => Ok(Single(PreviousColumn)),
+        "prev-window" => Ok(Single(PreviousWindowInColumn)),
 
         "cd" | "change-directory" => {
             if args.is_empty() {

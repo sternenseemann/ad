@@ -48,6 +48,10 @@ pub fn built_in_commands() -> Vec<(Vec<&'static str>, &'static str)> {
         ),
         (vec!["new-window"], "clone the current window as a new window at the end of the focused column"),
         (vec!["new-column"], "clone the current window as a new column"),
+        (vec!["next-window"], "move focus to the next window in the current column"),
+        (vec!["next-column"], "move focus to the next column"),
+        (vec!["prev-window"], "move focus to the previous window in the current column"),
+        (vec!["prev-column"], "move focus to the previous column"),
         (
             vec!["echo"],
             "display the given string in the status line ('echo hello, world!')",
