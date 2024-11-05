@@ -474,11 +474,11 @@ where
 
     pub(super) fn view_logs(&mut self) {
         self.layout
-            .open_virtual("+logs", self.log_buffer.content(), true)
+            .open_virtual("+logs", self.log_buffer.content(), false)
     }
 
     pub(super) fn show_help(&mut self) {
-        self.layout.open_virtual("+help", gen_help_docs(), true)
+        self.layout.open_virtual("+help", gen_help_docs(), false)
     }
 
     pub(super) fn debug_edit_log(&mut self) {
