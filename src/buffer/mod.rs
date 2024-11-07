@@ -495,22 +495,20 @@ impl Buffer {
         };
         let next = self.txt.get_char(current_index + 1);
 
-        let chars = match (prev, next) {
-            (Some('\n'), _) | (_, Some('\n')) => Some(('\n', '\n')),
-            (Some('('), _) | (_, Some(')')) => Some(('(', ')')),
-            (Some('['), _) | (_, Some(']')) => Some(('[', ']')),
-            (Some('{'), _) | (_, Some('}')) => Some(('{', '}')),
-            (Some('<'), _) | (_, Some('>')) => Some(('<', '>')),
-            (Some('"'), _) | (_, Some('"')) => Some(('"', '"')),
-            (Some('\''), _) | (_, Some('\'')) => Some(('\'', '\'')),
-            (Some(' '), _) | (_, Some(' ')) => Some((' ', ' ')),
+        let (l, r) = match (prev, next) {
+            (Some('\n'), _) | (_, Some('\n')) => ('\n', '\n'),
+            (Some('('), _) | (_, Some(')')) => ('(', ')'),
+            (Some('['), _) | (_, Some(']')) => ('[', ']'),
+            (Some('{'), _) | (_, Some('}')) => ('{', '}'),
+            (Some('<'), _) | (_, Some('>')) => ('<', '>'),
+            (Some('"'), _) | (_, Some('"')) => ('"', '"'),
+            (Some('\''), _) | (_, Some('\'')) => ('\'', '\''),
+            (Some(' '), _) | (_, Some(' ')) => (' ', ' '),
 
-            _ => None,
+            _ => return self.expand_cur_dot(),
         };
 
-        if let Some((l, r)) = chars {
-            self.set_dot(TextObject::Delimited(l, r), 1);
-        }
+        self.set_dot(TextObject::Delimited(l, r), 1);
     }
 
     /// If the current dot is a cursor rather than a range, expand it to a sensible range.
