@@ -75,8 +75,14 @@ impl Layout {
     pub(crate) fn open_or_focus<P: AsRef<Path>>(
         &mut self,
         path: P,
-        new_window: bool,
+        mut new_window: bool,
     ) -> io::Result<Option<BufferId>> {
+        if self.buffers.is_empty_scratch() {
+            // in the case where we only have an empty scratch buffer present, we always
+            // replace the current buffer with the one that is newly opened.
+            new_window = false;
+        }
+
         let opt = self.buffers.open_or_focus(path)?;
         let id = self.active_buffer().id;
 
