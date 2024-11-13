@@ -1,0 +1,9 @@
+[package]
+name = "ad_repl"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ad_client = { version = "0.1.0", path = "../ad_client" }
+anyhow = "1.0.93"
+subprocess = "0.2.9"
