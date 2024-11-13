@@ -109,15 +109,14 @@ pub fn run_threaded_input_listener(event_rx: Receiver<FsysEvent>) -> Sender<Inpu
 pub fn send_event_to_editor(id: usize, s: &str, tx: &Sender<Event>) -> Result<usize> {
     let n_bytes_written = s.len();
 
-    for evt in FsysEvent::try_from_str(s)?.into_iter() {
-        let req = match evt.kind {
-            Kind::LoadBody | Kind::LoadTag => Req::LoadInBuffer { id, txt: evt.txt },
-            Kind::ExecuteBody | Kind::ExecuteTag => Req::ExecuteInBuffer { id, txt: evt.txt },
-            _ => continue,
-        };
+    let evt = FsysEvent::try_from_str(s)?;
+    let req = match evt.kind {
+        Kind::LoadBody | Kind::LoadTag => Req::LoadInBuffer { id, txt: evt.txt },
+        Kind::ExecuteBody | Kind::ExecuteTag => Req::ExecuteInBuffer { id, txt: evt.txt },
+        _ => return Ok(n_bytes_written),
+    };
 
-        Message::send(req, tx)?;
-    }
+    Message::send(req, tx)?;
 
     Ok(n_bytes_written)
 }
