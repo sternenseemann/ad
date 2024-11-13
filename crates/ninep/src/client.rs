@@ -417,7 +417,7 @@ where
         let chunk_size = (self.msize - header_size) as usize;
         let mut inner = self.inner();
 
-        while cur <= len {
+        while cur < len {
             let end = min(cur + chunk_size, len);
             let resp = inner.send(
                 0,
@@ -546,8 +546,10 @@ where
         loop {
             match self.buf.iter().position(|&b| b == b'\n') {
                 Some(pos) => {
-                    let (line, remaining) = self.buf.split_at(pos + 1);
-                    let s = String::from_utf8(line.to_vec()).ok();
+                    let (raw_line, remaining) = self.buf.split_at(pos + 1);
+                    let mut line = raw_line.to_vec();
+                    line.pop();
+                    let s = String::from_utf8(line).ok();
                     self.buf = remaining.to_vec();
                     return s;
                 }
@@ -560,6 +562,9 @@ where
 
                     if data.is_empty() {
                         self.at_eof = true;
+                        if self.buf.is_empty() {
+                            return None;
+                        }
                         return String::from_utf8(mem::take(&mut self.buf)).ok();
                     }
 
