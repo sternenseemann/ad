@@ -160,7 +160,7 @@ impl EventFilter for Filter {
     ) -> io::Result<Outcome> {
         let s = match txt.strip_prefix("% ") {
             Some(s) => s,
-            None => &txt,
+            None => txt,
         };
 
         client.append_to_body(&self.buffer_id, &format!("\n% {s}\n"))?;
