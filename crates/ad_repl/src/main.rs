@@ -48,6 +48,7 @@ fn main() -> io::Result<()> {
     sleep(Duration::from_millis(50));
     f.send_input("prompt='% '\n", &mut client)?;
     f.clear_buffer(&mut client)?;
+    client.ctl("mark-clean", "")?;
 
     client.run_event_filter(&buffer_id, f).unwrap();
 
@@ -71,6 +72,7 @@ impl Filter {
         client.write_xaddr(&self.buffer_id, ",")?;
         client.write_xdot(&self.buffer_id, "% ")?;
         client.write_addr(&self.buffer_id, "$")?;
+        client.ctl("mark-clean", "")?;
 
         Ok(())
     }
@@ -109,6 +111,8 @@ impl EventFilter for Filter {
         txt: &str,
         client: &mut Client,
     ) -> io::Result<Outcome> {
+        client.ctl("mark-clean", "")?;
+
         if src == Source::Fsys {
             // This is us writing to the body so move dot to EOF
             client.write_addr(&self.buffer_id, "$")?;
@@ -134,6 +138,18 @@ impl EventFilter for Filter {
         Ok(Outcome::Handled)
     }
 
+    fn handle_delete(
+        &mut self,
+        _src: Source,
+        _from: usize,
+        _to: usize,
+        client: &mut Client,
+    ) -> io::Result<Outcome> {
+        client.ctl("mark-clean", "")?;
+
+        Ok(Outcome::Handled)
+    }
+
     fn handle_execute(
         &mut self,
         _src: Source,
@@ -142,7 +158,7 @@ impl EventFilter for Filter {
         txt: &str,
         client: &mut Client,
     ) -> io::Result<Outcome> {
-        client.append_to_body(&self.buffer_id, "\n")?;
+        client.append_to_body(&self.buffer_id, &format!("\n% {txt}\n"))?;
         let outcome = self.send_input(txt, client)?;
 
         Ok(outcome)
