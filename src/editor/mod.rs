@@ -326,7 +326,7 @@ where
             }
 
             LoadInBuffer { id, txt } => {
-                self.load_explicit_string(id, txt, false);
+                self.load_string_in_buffer(id, txt, false);
                 default_handled();
             }
 

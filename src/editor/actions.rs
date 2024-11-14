@@ -509,7 +509,20 @@ where
         }
 
         let s = b.dot.content(b);
+        if s.is_empty() {
+            return;
+        }
+
         let id = b.id;
+        self.load_string_in_buffer(id, s, load_in_new_window);
+    }
+
+    pub(super) fn load_string_in_buffer(&mut self, id: usize, s: String, load_in_new_window: bool) {
+        let b = match self.layout.buffer_with_id_mut(id) {
+            Some(b) => b,
+            None => return,
+        };
+
         let wdir = b
             .dir()
             .map(|p| p.display().to_string())
@@ -643,6 +656,10 @@ where
         }
 
         let mut cmd = b.dot.content(b).trim().to_string();
+        if cmd.is_empty() {
+            return;
+        }
+
         if let Some((_, arg)) = arg {
             cmd.push(' ');
             cmd.push_str(&arg);
