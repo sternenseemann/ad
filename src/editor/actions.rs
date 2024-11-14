@@ -580,6 +580,10 @@ where
         s: String,
         load_in_new_window: bool,
     ) {
+        if s.is_empty() {
+            return;
+        }
+
         let b = match self.layout.buffer_with_id_mut(bufid) {
             Some(b) => b,
             None => return,
