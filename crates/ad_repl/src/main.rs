@@ -158,8 +158,13 @@ impl EventFilter for Filter {
         txt: &str,
         client: &mut Client,
     ) -> io::Result<Outcome> {
-        client.append_to_body(&self.buffer_id, &format!("\n% {txt}\n"))?;
-        let outcome = self.send_input(txt, client)?;
+        let s = match txt.strip_prefix("% ") {
+            Some(s) => s,
+            None => &txt,
+        };
+
+        client.append_to_body(&self.buffer_id, &format!("\n% {s}\n"))?;
+        let outcome = self.send_input(s, client)?;
 
         Ok(outcome)
     }
