@@ -27,7 +27,7 @@
 //!       body
 //!       event
 //! ```
-use crate::{config_handle, input::Event};
+use crate::{config_handle, editor::Action, input::Event};
 use ninep::{
     fs::{FileMeta, IoUnit, Mode, Perm, Stat},
     server::{socket_path, ClientId, ReadOutcome, Serve9p, Server},
@@ -265,6 +265,23 @@ impl AdFs {
         }
 
         Ok(n_bytes)
+    }
+
+    fn set_active_buffer(&mut self, s: String) -> Result<usize> {
+        let id: usize = match s.trim().parse() {
+            Ok(n) => n,
+            Err(_) => {
+                trace!("invalid buffer id submitted to buffers/current: {s}");
+                return Ok(0);
+            }
+        };
+
+        if let Err(e) = self.tx.send(Event::Action(Action::FocusBuffer { id })) {
+            error!("unable to send event to main loop: {e}");
+            return Ok(0);
+        }
+
+        Ok(s.len())
     }
 
     fn minibuffer_read(&mut self, offset: usize, count: usize) -> ReadOutcome {
@@ -540,8 +557,9 @@ impl Serve9p for AdFs {
             },
 
             MINIBUFFER_QID => self.minibuffer_write(s),
+            CURRENT_BUFFER_QID => self.set_active_buffer(s),
 
-            CURRENT_BUFFER_QID | LOG_FILE_QID | INDEX_BUFFER_QID => Err(E_NOT_ALLOWED.to_string()),
+            LOG_FILE_QID | INDEX_BUFFER_QID => Err(E_NOT_ALLOWED.to_string()),
 
             qid => self.buffer_nodes.write(qid, s, offset),
         }

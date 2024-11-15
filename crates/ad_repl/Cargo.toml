@@ -16,11 +16,6 @@ include = [
 keywords = [ "terminal", "editor", "text-editor", ]
 categories = [ "development-tools", "text-editors", "command-line-utilities" ]
 
-[profile.release]
-strip = true
-lto = true
-
-
 [dependencies]
 ad_client = { version = "0.2", path = "../ad_client" }
 subprocess = "0.2.9"

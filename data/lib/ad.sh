@@ -37,7 +37,7 @@ adLog() { 9p read ad/log; }
 currentBufferId() { 9p read ad/buffers/current; }
 
 # Set focus to the buffer with the specified id
-focusBuffer() { adCtl "buffer $1"; }
+focusBuffer() { echo "$1" | 9p write ad/buffers/current; }
 
 # Clear the contents of the current buffer
 clearBuffer() {
