@@ -1,0 +1,31 @@
+#!/bin/sh
+
+# This script can be used to send code from an ad buffer to the ad_repl (+win) buffer 
+# and executed. 
+# 
+# To use: 
+# 1) start the ad repl (eg !ad_repl)
+# 2) select the code to be sent in any ad buffer 
+# 3) execute this script (eg !sendtoRepl) 
+
+source "$HOME/.ad/lib/ad.sh"
+
+requireAd
+
+# get id of ad_repl buffer
+replbuf=$(9p read ad/buffers/index | grep win | cut -c 1)
+
+# read in selected lines and get length 
+varin=$(bufRead "$bufid" dot)
+nlines=$(echo "$varin" | wc -l)
+
+# send to ad_repl buffer
+echo "buffer $replbuf" | 9p write ad/ctl
+echo "$varin" | bufWrite "$replbuf" body
+
+# set lines sent as dot
+echo '$-'"$nlines" | bufWrite "$replbuf" addr
+echo '$-'"$nlines"',+'$((nlines-1)) | bufWrite "$replbuf" addr
+
+# execute in repl
+echo 'Execute' | 9p write ad/ctl
