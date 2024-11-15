@@ -1,0 +1,23 @@
+#!/bin/sh
+
+source "$HOME/.ad/lib/ad.sh"
+
+requireAd
+
+# get id or ad_repl buffer
+replbuf=$(9p read ad/buffers/index | grep win | cut -c 1)
+
+# read in selected lines and get length 
+varin=$(bufRead "$bufid" dot)
+nlines=$(echo "$varin" | wc -l)
+
+# send to ad_repl buffer
+echo "buffer $replbuf" | 9p write ad/ctl
+echo "$varin" | bufWrite "$replbuf" body
+
+# set lines sent as dot
+echo '$-'"$nlines" | bufWrite "$replbuf" addr
+echo '$-'"$nlines"',+'$((nlines-1)) | bufWrite "$replbuf" addr
+
+# execute in repl
+echo 'Execute' | 9p write ad/ctl
