@@ -78,7 +78,9 @@ fn parse_command(input: &str, active_buffer_id: usize, cwd: &Path) -> Result<Act
             }
         }
 
+        "Execute" => Ok(Single(ExecuteDot)),
         "help" => Ok(Single(ShowHelp)),
+        "Load" => Ok(Single(LoadDot { new_window: false })),
 
         "o" | "open" => {
             if args.is_empty() {

@@ -41,10 +41,10 @@ updateCargoOutput() {
 
 handleEvents() {
   bufRead "$1" event | while read -r line; do
-    action="$(echo "$line" | cut -d' ' -f2)"
-    target="$(echo "$line" | cut -d' ' -f7)"
+    kind="$(echo "$line" | jq -r '.kind')"
+    target="$(echo "$line" | jq -r '.txt')"
 
-    case "$action" in
+    case "$kind" in
       "L")
         if [[ "$target" =~ E.... ]]; then
           output="$(cargo --explain "$target")"

@@ -61,10 +61,18 @@ pub fn built_in_commands() -> Vec<(Vec<&'static str>, &'static str)> {
             "run an Edit command (See 'Running Edit Commands')",
         ),
         (
+            vec!["Execute"],
+            "execute the contents of the current dot in the focused buffer",
+        ),
+        (
             vec!["expand-dot"],
             "smart expand the current cursor position into a range",
         ),
         (vec!["help"], "display this help file"),
+        (
+            vec!["Load"],
+            "load the contents of the current dot in the focused buffer",
+        ),
         (
             vec!["mark-clean"],
             "mark the current buffer as being clean to prevent saving changes",

@@ -1,7 +1,7 @@
-use ad_client::{Client, EventFilter, Outcome};
-use std::error::Error;
+use ad_client::{Client, EventFilter, Outcome, Source};
+use std::io;
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> io::Result<()> {
     let mut client = Client::new()?;
     client.open(".")?;
     let buffer = client.current_buffer()?;
@@ -15,11 +15,12 @@ struct Filter;
 impl EventFilter for Filter {
     fn handle_load(
         &mut self,
+        _src: Source,
         from: usize,
         to: usize,
         txt: &str,
         _client: &mut Client,
-    ) -> Result<Outcome, Box<dyn std::error::Error>> {
+    ) -> io::Result<Outcome> {
         println!("got load: {from}->{to} {txt:?}");
         match txt {
             "README.md" => Ok(Outcome::Passthrough),
