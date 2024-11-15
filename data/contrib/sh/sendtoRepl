@@ -1,10 +1,18 @@
 #!/bin/sh
 
+# This script can be used to send code from an ad buffer to the ad_repl (+win) buffer 
+# and executed. 
+# 
+# To use: 
+# 1) start the ad repl (eg !ad_repl)
+# 2) select the code to be sent in any ad buffer 
+# 3) execute this script (eg !sendtoRepl) 
+
 source "$HOME/.ad/lib/ad.sh"
 
 requireAd
 
-# get id or ad_repl buffer
+# get id of ad_repl buffer
 replbuf=$(9p read ad/buffers/index | grep win | cut -c 1)
 
 # read in selected lines and get length 
