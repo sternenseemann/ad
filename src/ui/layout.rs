@@ -409,6 +409,8 @@ impl Layout {
             }
             col.update_size(rows, w);
         }
+
+        self.clamp_scroll();
     }
 
     /// Set the currently focused window to contain the given buffer
