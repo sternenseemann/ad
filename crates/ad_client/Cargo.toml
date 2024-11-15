@@ -1,8 +1,22 @@
 [package]
 name = "ad_client"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+authors = ["sminez <innes.andersonmorrison@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/sminez/ad"
+documentation = "https://docs.rs/ad_client"
+readme = "README.md"
+description = "A Rust client API for the ad text editor"
+include = [
+    "src/**/*",
+    "Cargo.toml",
+    "README.md"
+]
+keywords = [ "terminal", "editor", "text-editor", ]
+categories = [ "development-tools", "text-editors", "command-line-utilities" ]
+
 
 [dependencies]
-ad_event = { version = "0.1.1", path = "../ad_event" }
+ad_event = { version = "0.2", path = "../ad_event" }
 ninep = { version = "0.2", path = "../ninep" }

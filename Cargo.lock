@@ -18,7 +18,7 @@ dependencies = [
 
 [[package]]
 name = "ad_client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ad_event",
  "ninep",
@@ -26,7 +26,7 @@ dependencies = [
 
 [[package]]
 name = "ad_event"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -38,7 +38,6 @@ name = "ad_repl"
 version = "0.1.0"
 dependencies = [
  "ad_client",
- "anyhow",
  "subprocess",
 ]
 
@@ -62,12 +61,6 @@ name = "anstyle"
 version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bec1de6f59aedf83baf9ff929c98f2ad654b97c9510f4e70cf6f661d49fd5b1"
-
-[[package]]
-name = "anyhow"
-version = "1.0.93"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c95c10ba0b00a02636238b814946408b1322d5ac4760326e6fb8ec956d85775"
 
 [[package]]
 name = "autocfg"
