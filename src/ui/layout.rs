@@ -268,19 +268,12 @@ impl Layout {
         None
     }
 
-    pub(crate) fn write_output_for_buffer(
-        &mut self,
-        id: usize,
-        s: String,
-        cwd: &Path,
-        new_window: bool,
-    ) {
-        if let Some(id) = self.buffers.write_output_for_buffer(id, s, cwd) {
-            if new_window {
-                self.show_buffer_in_new_window(id);
-            } else {
-                self.show_buffer_in_active_window(id);
-            }
+    pub(crate) fn write_output_for_buffer(&mut self, id: usize, s: String, cwd: &Path) {
+        let id = self.buffers.write_output_for_buffer(id, s, cwd);
+        if !self.buffer_is_visible(id) {
+            self.show_buffer_in_new_window(id);
+        } else {
+            self.show_buffer_in_active_window(id);
         }
     }
 

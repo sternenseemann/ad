@@ -259,26 +259,18 @@ impl Buffers {
     }
 
     /// Append to the +output buffer assigned to the buffer with provided id.
-    pub(crate) fn write_output_for_buffer(
-        &mut self,
-        id: usize,
-        s: String,
-        cwd: &Path,
-    ) -> Option<BufferId> {
+    pub(crate) fn write_output_for_buffer(&mut self, id: usize, s: String, cwd: &Path) -> BufferId {
         let key = match self.with_id(id) {
             Some(b) => b.output_file_key(cwd),
             None => format!("{}/DEFAULT_OUTPUT_BUFFER", cwd.display()),
         };
 
-        match self
-            .inner
-            .iter_mut()
-            .find(|(_, b)| b.kind == BufferKind::Output(key.clone()))
-        {
+        let k = BufferKind::Output(key.clone());
+        match self.inner.iter_mut().find(|(_, b)| b.kind == k) {
             Some((_, b)) => {
                 b.append(s, Source::Fsys);
 
-                None
+                b.id
             }
 
             None => {
@@ -288,7 +280,7 @@ impl Buffers {
                 self.record_jump_position();
                 self.inner.insert(b);
 
-                Some(id)
+                id
             }
         }
     }

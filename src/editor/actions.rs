@@ -713,13 +713,15 @@ where
         }
 
         if !buf.is_empty() {
+            let s = match String::from_utf8(buf) {
+                Ok(s) => s,
+                Err(e) => {
+                    error!(%e, "edit command produced invalid utf8 output");
+                    return;
+                }
+            };
             let id = self.active_buffer_id();
-            self.layout.write_output_for_buffer(
-                id,
-                String::from_utf8(buf).unwrap(),
-                &self.cwd,
-                true,
-            );
+            self.layout.write_output_for_buffer(id, s, &self.cwd);
         }
     }
 

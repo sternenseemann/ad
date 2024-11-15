@@ -307,7 +307,7 @@ where
             }),
 
             AppendOutput { id, s } => {
-                self.layout.write_output_for_buffer(id, s, &self.cwd, true);
+                self.layout.write_output_for_buffer(id, s, &self.cwd);
                 default_handled();
             }
 
@@ -365,7 +365,7 @@ where
         match action {
             AppendToOutputBuffer { bufid, content } => self
                 .layout
-                .write_output_for_buffer(bufid, content, &self.cwd, true),
+                .write_output_for_buffer(bufid, content, &self.cwd),
             ChangeDirectory { path } => self.change_directory(path),
             CommandMode => self.command_mode(),
             DeleteBuffer { force } => self.delete_buffer(self.active_buffer_id(), force),
