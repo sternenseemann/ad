@@ -702,6 +702,7 @@ fn styled_rline_unchecked(
 
     let dot_range = b.dot.line_range(y, b).map(map_line_range);
     let (rline, dot_range) = raw_rline_unchecked(b, view, y, lpad, screen_cols, dot_range);
+    let rline = rline.replace("\x1b", "�");
 
     let raw_tks = match &b.tokenizer {
         Some(t) => t.tokenize(&rline),
