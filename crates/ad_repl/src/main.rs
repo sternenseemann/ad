@@ -6,59 +6,68 @@
 //! - Running "exit" will close the shell subprocess as well as the ad buffer
 use ad_client::{Client, EventFilter, Outcome, Source};
 use std::{
+    env,
+    fs::File,
     io::{self, copy, Write},
-    process::{exit, Child, ChildStdin, Command, Stdio},
-    thread::{sleep, spawn},
-    time::Duration,
+    process::exit,
+    thread::spawn,
 };
+use subprocess::{Popen, PopenConfig, Redirection};
+
+const PROMPT: &str = "% ";
 
 fn main() -> io::Result<()> {
-    let mut client = Client::new()?;
+    let mut client = match Client::new() {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("unable to connect to ad\n{e}");
+            exit(1);
+        }
+    };
+
     client.open_in_new_window("+win")?;
     let buffer_id = client.current_buffer()?;
+    let mut env_vars: Vec<(String, String)> = env::vars().collect();
+    env_vars.push(("prompt".into(), PROMPT.into()));
 
-    let mut child = Command::new("rc")
-        .arg("-i")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+    let mut child = Popen::create(
+        &["rc", "-i"],
+        PopenConfig {
+            stdin: Redirection::Pipe,
+            stdout: Redirection::Pipe,
+            stderr: Redirection::Merge,
+            env: Some(
+                env_vars
+                    .into_iter()
+                    .map(|(k, v)| (k.into(), v.into()))
+                    .collect(),
+            ),
+            ..Default::default()
+        },
+    )
+    .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
 
     let stdin = child.stdin.take().unwrap();
     let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
-
     let mut w = client.body_writer(&buffer_id)?;
     spawn(move || {
         _ = copy(&mut stdout, &mut w);
     });
 
-    let mut w = client.body_writer(&buffer_id)?;
-    spawn(move || {
-        _ = copy(&mut stderr, &mut w);
-    });
-
-    let mut f = Filter {
-        child,
-        buffer_id: buffer_id.clone(),
-        stdin,
-    };
-
-    // Ensure that the prompt is set to '%' as the ubuntu package changes it to ';'
-    sleep(Duration::from_millis(50));
-    f.send_input("prompt='% '\n", &mut client)?;
-    f.clear_buffer(&mut client)?;
-    client.ctl("mark-clean", "")?;
-
-    client.run_event_filter(&buffer_id, f).unwrap();
-
-    Ok(())
+    client.run_event_filter(
+        &buffer_id,
+        Filter {
+            child,
+            buffer_id: buffer_id.clone(),
+            stdin,
+        },
+    )
 }
 
 struct Filter {
-    child: Child,
+    child: Popen,
     buffer_id: String,
-    stdin: ChildStdin,
+    stdin: File,
 }
 
 impl Drop for Filter {
@@ -70,7 +79,7 @@ impl Drop for Filter {
 impl Filter {
     fn clear_buffer(&mut self, client: &mut Client) -> io::Result<()> {
         client.write_xaddr(&self.buffer_id, ",")?;
-        client.write_xdot(&self.buffer_id, "% ")?;
+        client.write_xdot(&self.buffer_id, PROMPT)?;
         client.write_addr(&self.buffer_id, "$")?;
         client.ctl("mark-clean", "")?;
 
@@ -127,11 +136,7 @@ impl EventFilter for Filter {
             if xaddr == addr {
                 client.write_xaddr(&self.buffer_id, "$-1")?;
                 let raw = client.read_xdot(&self.buffer_id)?;
-                let s = match raw.strip_prefix("% ") {
-                    Some(s) => s,
-                    None => &raw,
-                };
-                return self.send_input(s, client);
+                return self.send_input(strip_prompt(&raw), client);
             }
         }
 
@@ -158,14 +163,15 @@ impl EventFilter for Filter {
         txt: &str,
         client: &mut Client,
     ) -> io::Result<Outcome> {
-        let s = match txt.strip_prefix("% ") {
-            Some(s) => s,
-            None => txt,
-        };
-
-        client.append_to_body(&self.buffer_id, &format!("\n% {s}\n"))?;
+        let s = strip_prompt(txt).trim();
+        client.append_to_body(&self.buffer_id, &format!("\n{PROMPT}{s}\n"))?;
         let outcome = self.send_input(s, client)?;
 
         Ok(outcome)
     }
+}
+
+#[inline]
+fn strip_prompt(s: &str) -> &str {
+    s.strip_prefix(PROMPT).unwrap_or(s)
 }
