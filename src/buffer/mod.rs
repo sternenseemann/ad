@@ -5,7 +5,6 @@ use crate::{
     editor::Action,
     exec::IterBoundedChars,
     fsys::InputFilter,
-    ftype::{lex::Tokenizer, try_tokenizer_for_path},
     key::Input,
     util::normalize_line_endings,
     MAX_NAME_LEN, UNNAMED_BUFFER,
@@ -150,7 +149,6 @@ pub struct Buffer {
     pub(crate) last_save: SystemTime,
     pub(crate) dirty: bool,
     pub(crate) input_filter: Option<InputFilter>,
-    pub(crate) tokenizer: Option<Tokenizer>,
     edit_log: EditLog,
 }
 
@@ -158,7 +156,6 @@ impl Buffer {
     /// As the name implies, this method MUST be called with the full cannonical file path
     pub(super) fn new_from_canonical_file_path(id: usize, path: PathBuf) -> io::Result<Self> {
         let (kind, raw) = BufferKind::try_kind_and_content_from_path(path.clone())?;
-        let tokenizer = try_tokenizer_for_path(&path, raw.lines().next());
 
         Ok(Self {
             id,
@@ -170,7 +167,6 @@ impl Buffer {
             last_save: SystemTime::now(),
             dirty: false,
             edit_log: EditLog::default(),
-            tokenizer,
             input_filter: None,
         })
     }
@@ -267,7 +263,6 @@ impl Buffer {
             last_save: SystemTime::now(),
             dirty: false,
             edit_log: Default::default(),
-            tokenizer: None,
             input_filter: None,
         }
     }
@@ -284,7 +279,6 @@ impl Buffer {
             last_save: SystemTime::now(),
             dirty: false,
             edit_log: EditLog::default(),
-            tokenizer: None,
             input_filter: None,
         }
     }
@@ -309,7 +303,6 @@ impl Buffer {
             last_save: SystemTime::now(),
             dirty: false,
             edit_log: EditLog::default(),
-            tokenizer: None,
             input_filter: None,
         }
     }
@@ -327,7 +320,6 @@ impl Buffer {
             last_save: SystemTime::now(),
             dirty: false,
             edit_log: EditLog::default(),
-            tokenizer: None,
             input_filter: None,
         }
     }

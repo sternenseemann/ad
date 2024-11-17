@@ -104,15 +104,6 @@ impl Match {
         &s[first..=last]
     }
 
-    pub(crate) fn str_match_text_ref_with_byte_offsets<'a>(
-        &self,
-        s: &'a str,
-    ) -> (usize, usize, &'a str) {
-        let (first, last) = self.str_loc_bytes(s);
-
-        (first, last, &s[first..=last])
-    }
-
     /// The numbered submatch match as applied to s
     pub fn str_submatch_text(&self, n: usize, s: &str) -> Option<String> {
         let (a, b) = self.sub_loc(n)?;

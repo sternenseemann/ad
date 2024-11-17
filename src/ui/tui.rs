@@ -5,7 +5,6 @@ use crate::{
     config_handle, die,
     dot::{LineRange, Range},
     editor::{Click, MiniBufferState},
-    ftype::lex::{Token, TokenType, Tokens},
     input::Event,
     key::{Input, MouseButton, MouseEvent},
     restore_terminal_state,
@@ -16,6 +15,7 @@ use crate::{
     term::{Cursor, Style},
     ui::{
         layout::{Column, View, Window},
+        lex::{Token, TokenType, Tokens},
         Layout, StateChange, UserInterface,
     },
     ziplist, ORIGINAL_TERMIOS, VERSION,
@@ -704,13 +704,10 @@ fn styled_rline_unchecked(
     let (rline, dot_range) = raw_rline_unchecked(b, view, y, lpad, screen_cols, dot_range);
     let rline = rline.replace("\x1b", "�");
 
-    let raw_tks = match &b.tokenizer {
-        Some(t) => t.tokenize(&rline),
-        None => Tokens::Single(Token {
-            ty: TokenType::Default,
-            s: &rline,
-        }),
-    };
+    let raw_tks = Tokens::Single(Token {
+        ty: TokenType::Default,
+        s: &rline,
+    });
 
     let mut tks = match dot_range {
         Some((start, end)) => raw_tks.with_highlighted_dot(start, end, TokenType::Dot),

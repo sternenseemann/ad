@@ -8,6 +8,7 @@ use crate::{
 use std::sync::mpsc::Sender;
 
 mod layout;
+mod lex;
 mod tui;
 
 pub(crate) use layout::Layout;
