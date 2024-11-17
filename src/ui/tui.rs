@@ -281,16 +281,16 @@ impl UserInterface for Tui {
     fn refresh(
         &mut self,
         mode_name: &str,
-        windows: &Layout,
+        layout: &Layout,
         pending_keys: &[Input],
         held_click: Option<&Click>,
         mb: Option<MiniBufferState<'_>>,
     ) {
-        self.screen_rows = windows.screen_rows;
-        self.screen_cols = windows.screen_cols;
+        self.screen_rows = layout.screen_rows;
+        self.screen_cols = layout.screen_cols;
         let w_minibuffer = mb.is_some();
         let mb = mb.unwrap_or_default();
-        let active_buffer = windows.active_buffer();
+        let active_buffer = layout.active_buffer();
         let mb_lines = mb.b.map(|b| b.len_lines()).unwrap_or_default();
         let mb_offset = if mb_lines > 0 { 1 } else { 0 };
 
@@ -315,11 +315,11 @@ impl UserInterface for Tui {
         let mut lines = Vec::with_capacity(self.screen_rows + 2);
         lines.push(format!("{}{}", Cursor::Hide, Cursor::ToStart));
 
-        if windows.is_empty_scratch() {
+        if layout.is_empty_scratch() {
             lines.append(&mut self.render_banner(effective_screen_rows, &cs));
         } else {
             lines.extend(WinsIter::new(
-                windows,
+                layout,
                 load_exec_range,
                 effective_screen_rows,
                 self,
@@ -339,7 +339,7 @@ impl UserInterface for Tui {
         let (x, y) = if w_minibuffer {
             (mb.cx, self.screen_rows + mb.n_visible_lines + 1)
         } else {
-            windows.ui_xy(active_buffer)
+            layout.ui_xy(active_buffer)
         };
         lines.push(format!("{}{}", Cursor::To(x + 1, y + 1), Cursor::Show));
 
@@ -373,18 +373,18 @@ struct WinsIter<'a> {
 
 impl<'a> WinsIter<'a> {
     fn new(
-        windows: &'a Layout,
+        layout: &'a Layout,
         load_exec_range: Option<(bool, Range)>,
         screen_rows: usize,
         tui: &'a Tui,
         cs: &'a ColorScheme,
     ) -> Self {
-        let col_iters: Vec<_> = windows
+        let col_iters: Vec<_> = layout
             .cols
             .iter()
             .map(|(is_focus, col)| {
                 let rng = if is_focus { load_exec_range } else { None };
-                ColIter::new(col, windows, rng, screen_rows, cs)
+                ColIter::new(col, layout, rng, screen_rows, cs)
             })
             .collect();
         let buf = Vec::with_capacity(col_iters.len());
@@ -422,7 +422,7 @@ impl<'a> Iterator for WinsIter<'a> {
 struct ColIter<'a> {
     inner: ziplist::Iter<'a, Window>,
     current: Option<WinIter<'a>>,
-    wins: &'a Layout,
+    layout: &'a Layout,
     cs: &'a ColorScheme,
     load_exec_range: Option<(bool, Range)>,
     screen_rows: usize,
@@ -433,7 +433,7 @@ struct ColIter<'a> {
 impl<'a> ColIter<'a> {
     fn new(
         col: &'a Column,
-        wins: &'a Layout,
+        layout: &'a Layout,
         load_exec_range: Option<(bool, Range)>,
         screen_rows: usize,
         cs: &'a ColorScheme,
@@ -441,7 +441,7 @@ impl<'a> ColIter<'a> {
         ColIter {
             inner: col.wins.iter(),
             current: None,
-            wins,
+            layout,
             cs,
             load_exec_range,
             screen_rows,
@@ -455,7 +455,7 @@ impl<'a> ColIter<'a> {
     fn next_win_iter(&mut self) -> Option<WinIter<'a>> {
         let (is_focus, w) = self.inner.next()?;
         let b = self
-            .wins
+            .layout
             .buffer_with_id(w.view.bufid)
             .expect("valid buffer id");
 

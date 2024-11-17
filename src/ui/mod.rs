@@ -29,7 +29,7 @@ pub(crate) trait UserInterface {
     fn refresh(
         &mut self,
         mode_name: &str,
-        windows: &Layout,
+        layout: &Layout,
         pending_keys: &[Input],
         held_click: Option<&Click>,
         mb: Option<MiniBufferState<'_>>,
@@ -107,14 +107,14 @@ impl UserInterface for Ui {
     fn refresh(
         &mut self,
         mode_name: &str,
-        windows: &Layout,
+        layout: &Layout,
         pending_keys: &[Input],
         held_click: Option<&Click>,
         mb: Option<MiniBufferState<'_>>,
     ) {
         match self {
             Self::Headless => (),
-            Self::Tui(tui) => tui.refresh(mode_name, windows, pending_keys, held_click, mb),
+            Self::Tui(tui) => tui.refresh(mode_name, layout, pending_keys, held_click, mb),
         }
     }
 
