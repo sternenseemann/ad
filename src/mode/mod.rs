@@ -36,7 +36,7 @@ impl Mode {
         Mode {
             name: name.to_string(),
             cur_shape: CurShape::Block,
-            keymap: Trie::from_pairs(Vec::new()),
+            keymap: Trie::from_pairs(Vec::new()).unwrap(),
             handle_expired_pending: |_| QueryResult::Missing,
         }
     }
@@ -79,7 +79,7 @@ macro_rules! keymap {
                 pairs.push((key, value));
             )+
 
-            $crate::trie::Trie::from_pairs(pairs)
+            $crate::trie::Trie::from_pairs(pairs).unwrap()
         }
     };
 

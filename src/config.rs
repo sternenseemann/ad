@@ -29,7 +29,7 @@ impl Default for Config {
             minibuffer_lines: 8,
             find_command: "fd -t f".to_string(),
             colorscheme: ColorScheme::default(),
-            bindings: Trie::from_pairs(Vec::new()),
+            bindings: Trie::from_pairs(Vec::new()).unwrap(),
         }
     }
 }
@@ -142,9 +142,12 @@ impl Config {
                     return Err(format!("mapping '{s}' collides with a Normal mode mapping"));
                 }
             }
+            let mut bindings = self.bindings.clone();
+            bindings
+                .extend_from_pairs(raw_bindings)
+                .map_err(|s| s.to_owned())?;
+            self.bindings = bindings;
         }
-
-        self.bindings = Trie::from_pairs(raw_bindings);
 
         Ok(())
     }
@@ -268,7 +271,8 @@ map G G => my-prog
             (vec![Input::Char(' '), Input::Char('F')], "fmt".to_string()),
             (vec![Input::Char('>')], "indent".to_string()),
             (vec![Input::Char('<')], "unindent".to_string()),
-        ]);
+        ])
+        .unwrap();
 
         let expected = Config {
             bindings,
@@ -289,7 +293,8 @@ map G G => my-prog
             bindings: Trie::from_pairs(vec![(
                 vec![Input::Char('G'), Input::Char('G')],
                 "my-prog".to_string(),
-            )]),
+            )])
+            .unwrap(),
             ..Default::default()
         };
 

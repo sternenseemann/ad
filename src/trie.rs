@@ -40,18 +40,29 @@ where
 {
     /// Will panic if there are any key collisions or if there are any sequences that nest
     /// under a prefix that is already required to hold a value
-    pub fn from_pairs(pairs: Vec<(Vec<K>, V)>) -> Self {
+    pub fn from_pairs(pairs: Vec<(Vec<K>, V)>) -> Result<Self, &'static str> {
         let mut roots = Vec::new();
 
         for (k, v) in pairs.into_iter() {
-            insert(k, v, &mut roots)
+            insert(k, v, &mut roots)?;
         }
 
-        Self {
+        Ok(Self {
             parent_key: None,
             roots,
             default: None,
+        })
+    }
+
+    pub(crate) fn extend_from_pairs(
+        &mut self,
+        pairs: Vec<(Vec<K>, V)>,
+    ) -> Result<(), &'static str> {
+        for (k, v) in pairs.into_iter() {
+            insert(k, v, &mut self.roots)?;
         }
+
+        Ok(())
     }
 
     /// Set the default handler for unmatched single element keys
@@ -128,18 +139,18 @@ where
     V: Clone,
 {
     /// Construct a new [Trie] with char internal keys from the given string keys.
-    pub fn from_str_keys(pairs: Vec<(&str, V)>) -> Self {
+    pub fn from_str_keys(pairs: Vec<(&str, V)>) -> Result<Self, &'static str> {
         let mut roots = Vec::new();
 
         for (k, v) in pairs.into_iter() {
-            insert(k.chars().collect(), v, &mut roots)
+            insert(k.chars().collect(), v, &mut roots)?;
         }
 
-        Self {
+        Ok(Self {
             parent_key: None,
             roots,
             default: None,
-        }
+        })
     }
 
     /// Query this [Trie] using a string key.
@@ -243,11 +254,11 @@ where
         }
     }
 
-    // Panics if this node already holds a value
-    fn insert(&mut self, k: Vec<K>, v: V) {
+    // Errors if this node already holds a value
+    fn insert(&mut self, k: Vec<K>, v: V) -> Result<(), &'static str> {
         match &mut self.d {
             Data::Children(nodes) => insert(k, v, nodes),
-            Data::Val(_) => panic!("attempt to insert into value node"),
+            Data::Val(_) => Err("attempt to insert into value node"),
         }
     }
 
@@ -273,7 +284,7 @@ where
     }
 }
 
-fn insert<K, V>(mut key: Vec<K>, v: V, current: &mut Vec<Node<K, V>>)
+fn insert<K, V>(mut key: Vec<K>, v: V, current: &mut Vec<Node<K, V>>) -> Result<(), &'static str>
 where
     K: Clone + PartialEq,
 {
@@ -281,10 +292,10 @@ where
         if key[0] == n.k {
             if key.len() > 1 {
                 key.remove(0);
-                n.insert(key, v);
-                return;
+                n.insert(key, v)?;
+                return Ok(());
             }
-            panic!("duplicate entry for key")
+            return Err("duplicate entry for key");
         }
     }
 
@@ -295,11 +306,13 @@ where
         current.push(Node { k, d: Data::Val(v) });
     } else {
         let mut children = vec![];
-        insert(key, v, &mut children);
+        insert(key, v, &mut children)?;
 
         let d = Data::Children(children);
         current.push(Node { k, d });
     }
+
+    Ok(())
 }
 
 fn get_node<'n, K, V>(key: &[K], nodes: &'n [Node<K, V>]) -> Option<&'n Node<K, V>>
@@ -353,15 +366,13 @@ mod tests {
     use simple_test_case::test_case;
 
     #[test]
-    #[should_panic(expected = "duplicate entry for key")]
-    fn duplicate_keys_panic() {
-        Trie::from_pairs(vec![(vec![42], 1), (vec![42], 2)]);
+    fn duplicate_keys_errors() {
+        assert!(Trie::from_pairs(vec![(vec![42], 1), (vec![42], 2)]).is_err());
     }
 
     #[test]
-    #[should_panic(expected = "attempt to insert into value node")]
-    fn children_under_a_value_node_panics() {
-        Trie::from_pairs(vec![(vec![42], 1), (vec![42, 69], 2)]);
+    fn children_under_a_value_node_errors() {
+        assert!(Trie::from_pairs(vec![(vec![42], 1), (vec![42, 69], 2)]).is_err());
     }
 
     #[test_case(&[42], None; "partial should be None")]
@@ -370,7 +381,7 @@ mod tests {
     #[test_case(&[42, 69], Some(1); "exact should be Some")]
     #[test]
     fn get_exact_works(k: &[usize], expected: Option<usize>) {
-        let t = Trie::from_pairs(vec![(vec![42, 69], 1)]);
+        let t = Trie::from_pairs(vec![(vec![42, 69], 1)]).unwrap();
 
         assert_eq!(t.get_exact(k), expected);
     }
@@ -381,7 +392,7 @@ mod tests {
     #[test_case("foo", Some(1); "exact should be Some")]
     #[test]
     fn get_str_exact_works(k: &str, expected: Option<usize>) {
-        let t = Trie::from_str_keys(vec![("foo", 1)]);
+        let t = Trie::from_str_keys(vec![("foo", 1)]).unwrap();
 
         assert_eq!(t.get_str_exact(k), expected);
     }
@@ -393,7 +404,7 @@ mod tests {
     #[test_case("have you any wool?", QueryResult::Missing; "completely missing")]
     #[test]
     fn get_works(k: &str, expected: QueryResult<usize>) {
-        let t = Trie::from_str_keys(vec![("foo", 1), ("bar", 2), ("baz", 3)]);
+        let t = Trie::from_str_keys(vec![("foo", 1), ("bar", 2), ("baz", 3)]).unwrap();
 
         assert_eq!(t.get_str(k), expected);
     }
@@ -415,7 +426,8 @@ mod tests {
                 .enumerate()
                 .map(|(i, s)| (s, i))
                 .collect(),
-        );
+        )
+        .unwrap();
 
         assert_eq!(t.candidate_strings(k), expected);
     }
@@ -431,7 +443,7 @@ mod tests {
     #[test_case(&[12], QueryResult::Partial; "partial should remain partial")]
     #[test]
     fn default_handlers_work(k: &[usize], expected: QueryResult<usize>) {
-        let mut t = Trie::from_pairs(vec![(vec![42], 1), (vec![12, 13], 2)]);
+        let mut t = Trie::from_pairs(vec![(vec![42], 1), (vec![12, 13], 2)]).unwrap();
         t.set_default(usize_default_handler);
 
         assert_eq!(t.get(k), expected);
