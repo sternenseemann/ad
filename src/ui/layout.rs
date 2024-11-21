@@ -213,6 +213,9 @@ impl Layout {
         } else {
             self.cols.focus.wins.remove_focused_unchecked();
         }
+
+        let id = self.cols.focus.wins.focus.view.bufid;
+        self.buffers.focus_id(id);
         self.update_screen_size(self.screen_rows, self.screen_cols);
 
         false
@@ -224,7 +227,11 @@ impl Layout {
         if self.cols.len() == 1 {
             return true;
         }
+
         self.cols.remove_focused_unchecked();
+
+        let id = self.cols.focus.wins.focus.view.bufid;
+        self.buffers.focus_id(id);
         self.update_screen_size(self.screen_rows, self.screen_cols);
 
         false
