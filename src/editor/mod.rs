@@ -8,7 +8,7 @@ use crate::{
     fsys::{AdFs, InputFilter, LogEvent, Message, Req},
     input::Event,
     key::{Arrow, Input},
-    lsp::LspManager,
+    lsp::{LspManager, LspManagerHandle},
     mode::{modes, Mode},
     plumb::PlumbingRules,
     set_config,
@@ -59,7 +59,7 @@ where
     modes: Vec<Mode>,
     pending_keys: Vec<Input>,
     layout: Layout,
-    lsp_manager: LspManager,
+    lsp_manager: LspManagerHandle,
     tx_events: Sender<Event>,
     rx_events: Receiver<Event>,
     tx_fsys: Sender<LogEvent>,
@@ -103,7 +103,7 @@ where
         let (tx_fsys, rx_fsys) = channel();
 
         set_config(cfg);
-        let lsp_manager = LspManager::new(tx_events.clone());
+        let lsp_manager = LspManager::spawn(tx_events.clone());
 
         Self {
             system,
@@ -402,28 +402,16 @@ where
             LoadDot { new_window } => self.default_load_dot(source, new_window),
 
             // FIXME: hard coded values for initial testing
-            LspStart => {
-                let msg = self.lsp_manager.start_client(
-                    "rust".to_string(),
-                    "rust-analyzer",
-                    "/home/sminez/repos/personal/ad",
-                );
-                self.set_status_message(msg);
-            }
-            LspStop => {
-                let msg = self.lsp_manager.stop_client(self.layout.active_buffer());
-                self.set_status_message(msg);
-            }
-            LspGotoDefinition => {
-                let msg = self
-                    .lsp_manager
-                    .goto_definition(self.layout.active_buffer());
-                self.set_status_message(msg);
-            }
-            LspHover => {
-                let msg = self.lsp_manager.hover(self.layout.active_buffer());
-                self.set_status_message(msg);
-            }
+            LspStart => self.lsp_manager.start_client(
+                "rust".to_string(),
+                "rust-analyzer".to_string(),
+                "/home/sminez/repos/personal/ad".to_string(),
+            ),
+            LspStop => self.lsp_manager.stop_client(self.layout.active_buffer()),
+            LspGotoDefinition => self
+                .lsp_manager
+                .goto_definition(self.layout.active_buffer()),
+            LspHover => self.lsp_manager.hover(self.layout.active_buffer()),
 
             MarkClean { bufid } => self.mark_clean(bufid),
             NewEditLogTransaction => self.layout.active_buffer_mut().new_edit_log_transaction(),

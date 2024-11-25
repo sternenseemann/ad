@@ -10,7 +10,7 @@ use std::{
     io::{self, BufRead, BufReader},
     process::{self, ChildStdin, Command, Stdio},
     str::FromStr,
-    sync::mpsc::{Receiver, Sender},
+    sync::mpsc::Sender,
     thread::{spawn, JoinHandle},
 };
 use tracing::error;
@@ -22,12 +22,18 @@ pub struct LspMessage {
     pub msg: Message,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum Status {
+    Initializing,
+    Running,
+}
+
 // TODO: probably need to track capabilities in case the server we're talking to doesn't support
 //       some of the actions we want to make use of.
 /// A simple LSP client that talks to a single lsp server subprocess over stdin / stdout
 #[derive(Debug)]
 pub struct LspClient {
-    pub(super) rx_init: Option<Receiver<()>>,
+    pub(super) status: Status,
     pub(super) id: usize,
     pub(super) cmd: String,
     stdin: ChildStdin,
@@ -42,12 +48,7 @@ impl LspClient {
     /// Stdin for the server is held within the client and can be used via the [LspClient::write]
     /// method to communicate with the server. Messages coming from the server are sent over `tx`
     /// for centeral processing in the main editor event loop and errors are logged.
-    pub fn new(
-        lsp_id: usize,
-        cmd: &str,
-        tx: Sender<Req>,
-        rx_init: Receiver<()>,
-    ) -> io::Result<Self> {
+    pub fn new(lsp_id: usize, cmd: &str, tx: Sender<Req>) -> io::Result<Self> {
         let mut proc = Command::new(cmd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -77,7 +78,7 @@ impl LspClient {
         });
 
         Ok(Self {
-            rx_init: Some(rx_init),
+            status: Status::Initializing,
             id: lsp_id,
             cmd: cmd.to_string(),
             stdin,
