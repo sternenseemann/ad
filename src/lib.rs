@@ -26,6 +26,7 @@ pub mod fsys;
 pub mod input;
 pub mod key;
 pub mod log;
+pub mod lsp;
 pub mod mode;
 pub mod plumb;
 pub mod regex;

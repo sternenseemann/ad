@@ -82,6 +82,11 @@ fn parse_command(input: &str, active_buffer_id: usize, cwd: &Path) -> Result<Act
         "help" => Ok(Single(ShowHelp)),
         "Load" => Ok(Single(LoadDot { new_window: false })),
 
+        "LspStart" => Ok(Single(LspStart)),
+        "LspStop" => Ok(Single(LspStop)),
+        "LspGotoDef" => Ok(Single(LspGotoDefinition)),
+        "LspHover" => Ok(Single(LspHover)),
+
         "o" | "open" => {
             if args.is_empty() {
                 Err("No filename provided".to_string())

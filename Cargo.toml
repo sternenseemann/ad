@@ -40,6 +40,9 @@ harness = false
 ad_event = { version = "0.2", path = "crates/ad_event" }
 ninep = { version = "0.2", path = "crates/ninep" }
 libc = "0.2.159"
+lsp-types = "0.97.0"
+serde = "1.0.215"
+serde_json = "1.0.133"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = [ "fmt" ] }
 unicode-width = "0.2.0"

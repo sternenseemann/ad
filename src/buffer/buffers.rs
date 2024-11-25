@@ -123,7 +123,7 @@ impl Buffers {
         self.inner.insert(buf);
     }
 
-    pub(crate) fn open_virtual(&mut self, name: String, content: String) {
+    pub(crate) fn open_virtual(&mut self, name: String, content: String) -> BufferId {
         let existing_id = self
             .inner
             .iter()
@@ -139,13 +139,16 @@ impl Buffers {
             let n = self.inner.focus.txt.len_chars();
             self.inner.focus.dot.clamp_idx(n);
             self.inner.focus.xdot.clamp_idx(n);
-            return;
+            return id;
         }
 
-        let buf = Buffer::new_virtual(self.next_id, name, content);
+        let id = self.next_id;
+        let buf = Buffer::new_virtual(id, name, content);
         self.record_jump_position();
         self.push_buffer(buf);
         self.next_id += 1;
+
+        id
     }
 
     /// Used to seed the buffer selection mini-buffer

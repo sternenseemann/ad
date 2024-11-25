@@ -2,8 +2,8 @@
 use crate::{
     config_handle,
     dot::{find::find_forward_wrapping, Cur, Dot, Range, TextObject},
-    editor::Action,
-    exec::IterBoundedChars,
+    editor::{Action, Coords},
+    exec::{Addr, Address, IterBoundedChars},
     fsys::InputFilter,
     key::Input,
     util::normalize_line_endings,
@@ -682,6 +682,7 @@ impl Buffer {
             Action::DotExtendForward(tobj, count) => self.extend_dot_forward(tobj, count),
             Action::DotFlip => self.dot.flip(),
             Action::DotSet(t, count) => self.set_dot(t, count),
+            Action::DotSetFromCoords { coords } => self.set_dot_from_coords(coords),
 
             Action::RawInput { i } => return self.handle_raw_input(i),
 
@@ -749,6 +750,13 @@ impl Buffer {
         for _ in 0..n {
             t.set_dot(self);
         }
+        self.dot.clamp_idx(self.txt.len_chars());
+        self.xdot.clamp_idx(self.txt.len_chars());
+    }
+
+    fn set_dot_from_coords(&mut self, coords: Coords) {
+        let mut addr: Addr = coords.into();
+        self.dot = self.map_addr(&mut addr);
         self.dot.clamp_idx(self.txt.len_chars());
         self.xdot.clamp_idx(self.txt.len_chars());
     }

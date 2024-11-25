@@ -9,16 +9,8 @@ use std::{
     borrow::Cow,
     fmt,
     io::{self, BufRead, Write},
-    sync::atomic::{AtomicI32, Ordering},
 };
 use tracing::trace;
-
-/// Globally shared request ID counter
-static REQ_ID: AtomicI32 = AtomicI32::new(0);
-
-pub fn next_request_id() -> i32 {
-    REQ_ID.fetch_add(1, Ordering::SeqCst)
-}
 
 fn invalid_data(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, error)
@@ -167,20 +159,20 @@ impl fmt::Display for ExtractError<Notification> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
-    id: RequestId,
-    method: Cow<'static, str>,
+    pub id: RequestId,
+    pub method: Cow<'static, str>,
     #[serde(default = "Value::default")]
     #[serde(skip_serializing_if = "Value::is_null")]
-    params: Value,
+    pub params: Value,
 }
 
 impl Request {
-    pub fn new<R>(params: R::Params) -> Request
+    pub fn new<R>(id: RequestId, params: R::Params) -> Request
     where
         R: lsp_types::request::Request,
     {
         Self {
-            id: next_request_id().into(),
+            id,
             method: Cow::Borrowed(R::METHOD),
             params: serde_json::to_value(params).unwrap(),
         }
@@ -211,11 +203,11 @@ impl From<Request> for Message {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Response {
-    id: RequestId,
+    pub id: RequestId,
     #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<Value>,
+    pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<ResponseError>,
+    pub error: Option<ResponseError>,
 }
 
 impl Response {
@@ -307,7 +299,7 @@ pub enum ErrorCode {
     /// Error code indicating that a server received a notification or
     /// request before the server has received the `initialize` request.
     ServerNotInitialized = -32002,
-    UnknownErrorCode = -32001,
+    Unknown = -32001,
 
     // Defined by the protocol:
     /// The client has canceled a request and a server has detected
@@ -379,7 +371,7 @@ mod tests {
 
     #[test]
     fn new_req_works() {
-        let r = Request::new::<Initialize>(InitializeParams::default());
+        let r = Request::new::<Initialize>(0.into(), InitializeParams::default());
         let s = serde_json::to_string(&r).unwrap();
         assert_eq!(s, "");
     }

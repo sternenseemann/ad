@@ -9,7 +9,10 @@ dependencies = [
  "ad_event",
  "criterion",
  "libc",
+ "lsp-types",
  "ninep",
+ "serde",
+ "serde_json",
  "simple_test_case",
  "tracing",
  "tracing-subscriber",
@@ -31,17 +34,6 @@ dependencies = [
  "serde",
  "serde_json",
  "simple_test_case",
-]
-
-[[package]]
-name = "ad_lsp"
-version = "0.1.0"
-dependencies = [
- "lsp-types",
- "serde",
- "serde_json",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

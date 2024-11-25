@@ -5,7 +5,7 @@ use crate::{
     config_handle,
     dot::{Cur, Dot, Range, TextObject},
     editor::{Editor, MiniBufferSelection},
-    exec::{Addr, Address, Program},
+    exec::{Addr, AddrBase, Address, Program},
     fsys::LogEvent,
     key::{Arrow, Input},
     mode::Mode,
@@ -26,7 +26,7 @@ use std::{
 use tracing::{debug, error, info, trace, warn};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Actions {
+pub enum Actions {
     Single(Action),
     Multi(Vec<Action>),
 }
@@ -40,6 +40,23 @@ pub enum ViewPort {
     Center,
     /// Dot at the top of the viewport
     Top,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Coords {
+    pub start_row: usize,
+    pub start_col: usize,
+    pub end_row: usize,
+    pub end_col: usize,
+}
+
+impl From<Coords> for Addr {
+    fn from(c: Coords) -> Self {
+        Addr::Compound(
+            AddrBase::LineAndColumn(c.start_row, c.start_col).into(),
+            AddrBase::LineAndColumn(c.end_row, c.end_col).into(),
+        )
+    }
 }
 
 /// Supported actions for interacting with the editor state
@@ -58,6 +75,7 @@ pub enum Action {
     DotExtendForward(TextObject, usize),
     DotFlip,
     DotSet(TextObject, usize),
+    DotSetFromCoords { coords: Coords },
     DragWindow { direction: Arrow },
     EditCommand { cmd: String },
     ExecuteDot,
@@ -72,6 +90,10 @@ pub enum Action {
     JumpListForward,
     JumpListBack,
     LoadDot { new_window: bool },
+    LspStart,
+    LspStop,
+    LspGotoDefinition,
+    LspHover,
     MarkClean { bufid: usize },
     NewEditLogTransaction,
     NewColumn,
@@ -81,6 +103,7 @@ pub enum Action {
     NextWindowInColumn,
     OpenFile { path: String },
     OpenFileInNewWindow { path: String },
+    OpenVirtualFile { name: String, txt: String },
     Paste,
     PreviousBuffer,
     PreviousColumn,

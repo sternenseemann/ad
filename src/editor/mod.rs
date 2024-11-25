@@ -8,6 +8,7 @@ use crate::{
     fsys::{AdFs, InputFilter, LogEvent, Message, Req},
     input::Event,
     key::{Arrow, Input},
+    lsp::LspManager,
     mode::{modes, Mode},
     plumb::PlumbingRules,
     set_config,
@@ -31,7 +32,7 @@ mod commands;
 mod minibuffer;
 mod mouse;
 
-pub(crate) use actions::{Action, Actions, ViewPort};
+pub(crate) use actions::{Action, Actions, Coords, ViewPort};
 pub(crate) use built_in_commands::built_in_commands;
 pub(crate) use minibuffer::{MiniBufferSelection, MiniBufferState};
 pub(crate) use mouse::Click;
@@ -58,6 +59,7 @@ where
     modes: Vec<Mode>,
     pending_keys: Vec<Input>,
     layout: Layout,
+    lsp_manager: LspManager,
     tx_events: Sender<Event>,
     rx_events: Receiver<Event>,
     tx_fsys: Sender<LogEvent>,
@@ -101,6 +103,7 @@ where
         let (tx_fsys, rx_fsys) = channel();
 
         set_config(cfg);
+        let lsp_manager = LspManager::new(tx_events.clone());
 
         Self {
             system,
@@ -110,6 +113,7 @@ where
             modes: modes(),
             pending_keys: Vec::new(),
             layout: Layout::new(0, 0),
+            lsp_manager,
             tx_events,
             rx_events,
             tx_fsys,
@@ -156,6 +160,7 @@ where
         match event {
             Event::Input(i) => self.handle_input(i),
             Event::Action(a) => self.handle_action(a, Source::Fsys),
+            Event::Actions(a) => self.handle_actions(a, Source::Fsys),
             Event::Message(msg) => self.handle_message(msg),
             Event::WinsizeChanged { rows, cols } => self.update_window_size(rows, cols),
         }
@@ -206,6 +211,7 @@ where
             match self.rx_events.recv().unwrap() {
                 Event::Input(k) => return k,
                 Event::Action(a) => self.handle_action(a, Source::Fsys),
+                Event::Actions(a) => self.handle_actions(a, Source::Fsys),
                 Event::Message(msg) => self.handle_message(msg),
                 Event::WinsizeChanged { rows, cols } => self.update_window_size(rows, cols),
             }
@@ -394,6 +400,31 @@ where
             JumpListForward => self.jump_forward(),
             JumpListBack => self.jump_backward(),
             LoadDot { new_window } => self.default_load_dot(source, new_window),
+
+            // FIXME: hard coded values for initial testing
+            LspStart => {
+                let msg = self.lsp_manager.start_client(
+                    "rust".to_string(),
+                    "rust-analyzer",
+                    "/home/sminez/repos/personal/ad",
+                );
+                self.set_status_message(msg);
+            }
+            LspStop => {
+                let msg = self.lsp_manager.stop_client(self.layout.active_buffer());
+                self.set_status_message(msg);
+            }
+            LspGotoDefinition => {
+                let msg = self
+                    .lsp_manager
+                    .goto_definition(self.layout.active_buffer());
+                self.set_status_message(msg);
+            }
+            LspHover => {
+                let msg = self.lsp_manager.hover(self.layout.active_buffer());
+                self.set_status_message(msg);
+            }
+
             MarkClean { bufid } => self.mark_clean(bufid),
             NewEditLogTransaction => self.layout.active_buffer_mut().new_edit_log_transaction(),
             NewColumn => self.layout.new_column(),
@@ -414,6 +445,7 @@ where
             }
             OpenFile { path } => self.open_file_relative_to_cwd(&path, false),
             OpenFileInNewWindow { path } => self.open_file_relative_to_cwd(&path, true),
+            OpenVirtualFile { name, txt } => self.layout.open_virtual(name, txt, true),
             Paste => self.paste_from_clipboard(source),
             PreviousBuffer => {
                 let id = self.layout.focus_previous_buffer();

@@ -104,10 +104,13 @@ impl Layout {
         &mut self,
         name: impl Into<String>,
         content: impl Into<String>,
-        load_in_new_window: bool,
+        new_window: bool,
     ) {
-        self.buffers.open_virtual(name.into(), content.into());
-        if load_in_new_window {
+        let id = self.buffers.open_virtual(name.into(), content.into());
+
+        if self.buffer_is_visible(id) {
+            self.focus_first_window_with_buffer(id);
+        } else if new_window {
             self.show_buffer_in_new_window(self.active_buffer().id);
         } else {
             self.show_buffer_in_active_window(self.active_buffer().id);
