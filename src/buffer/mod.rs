@@ -371,6 +371,7 @@ impl Buffer {
     pub fn str_contents(&self) -> String {
         let mut s = self.txt.to_string();
         s.push('\n');
+
         s
     }
 
@@ -415,6 +416,12 @@ impl Buffer {
     #[inline]
     pub fn len_lines(&self) -> usize {
         self.txt.len_lines()
+    }
+
+    /// The number of utf-8 characters currently held in the buffer.
+    #[inline]
+    pub fn len_chars(&self) -> usize {
+        self.txt.len_chars()
     }
 
     /// Whether or not the buffer is empty.

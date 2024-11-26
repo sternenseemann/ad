@@ -685,7 +685,7 @@ impl GapBuffer {
     /// within the buffer and is treated as a String-like index but it does not
     /// account for the position of the gap.
     #[inline]
-    fn char_to_byte(&self, char_idx: usize) -> usize {
+    pub fn char_to_byte(&self, char_idx: usize) -> usize {
         self.offset_char_to_byte(char_idx, 0, 0)
     }
 

@@ -5,7 +5,7 @@
 use crate::{
     buffer::Buffer,
     die,
-    editor::{Action, Actions, Coords},
+    editor::{Action, Actions, Coords, ViewPort},
     input::Event,
     lsp::{
         client::{LspClient, LspMessage, Status},
@@ -13,7 +13,9 @@ use crate::{
         notifications::try_parse_notification,
     },
 };
-use lsp_types::{GotoDefinitionResponse, Hover, Location, NumberOrString, Range};
+use lsp_types::{
+    GotoDefinitionResponse, Hover, Location, NumberOrString, Position, PositionEncodingKind, Range,
+};
 use std::{
     collections::HashMap,
     sync::mpsc::{channel, Receiver, Sender},
@@ -385,6 +387,7 @@ fn handle_goto_definition(data: Option<Option<GotoDefinitionResponse>>) -> Optio
             Some(Actions::Multi(vec![
                 Action::OpenFile { path },
                 Action::DotSetFromCoords { coords },
+                Action::SetViewPort(ViewPort::Center),
             ]))
         }
 
@@ -394,6 +397,7 @@ fn handle_goto_definition(data: Option<Option<GotoDefinitionResponse>>) -> Optio
             Some(Actions::Multi(vec![
                 Action::OpenFile { path },
                 Action::DotSetFromCoords { coords },
+                Action::SetViewPort(ViewPort::Center),
             ]))
         }
 
@@ -455,4 +459,106 @@ fn parse_loc(
     };
 
     (filepath, coords)
+}
+
+// The LSP spec explicitly calls out needing to support \n, \r and \r\n line endings which ad
+// doesn't do. Files using \r or \r\n will likely result in malformed positions.
+
+/*
+ * The position encodings supported by the client. Client and server
+ * have to agree on the same position encoding to ensure that offsets
+ * (e.g. character position in a line) are interpreted the same on both
+ * side.
+ *
+ * To keep the protocol backwards compatible the following applies: if
+ * the value 'utf-16' is missing from the array of position encodings
+ * servers can assume that the client supports UTF-16. UTF-16 is
+ * therefore a mandatory encoding.
+ *
+ * If omitted it defaults to ['utf-16'].
+ *
+ * Implementation considerations: since the conversion from one encoding
+ * into another requires the content of the file / line the conversion
+ * is best done where the file is read which is usually on the server
+ * side.
+ *
+ * @since 3.17.0
+ */
+
+#[allow(dead_code)]
+fn parse_lsp_position(
+    b: &Buffer,
+    pos: Position,
+    encoding_kind: PositionEncodingKind,
+) -> (usize, usize) {
+    let pos_line = pos.line as usize;
+    if pos_line > b.len_lines() - 1 {
+        warn!("LSP position out of bounds, clamping to EOF");
+        return (b.len_lines().saturating_sub(1), b.len_chars());
+    }
+
+    if encoding_kind == PositionEncodingKind::UTF8 {
+        // Raw bytes
+        let line_start = b.txt.line_to_char(pos.line as usize);
+        let byte_idx = b.txt.char_to_byte(line_start + pos.character as usize);
+        let col = b.txt.byte_to_char(byte_idx);
+
+        (pos.line as usize, col)
+    } else if encoding_kind == PositionEncodingKind::UTF16 {
+        // Javascript / MS
+        let slice = b.txt.line(pos.line as usize);
+        let mut character = pos.character as usize;
+        let mut buf = [0; 2];
+        let mut col = 0;
+
+        for (idx, ch) in slice.chars().enumerate() {
+            let n = ch.encode_utf16(&mut buf).len();
+            col = idx;
+            character -= n;
+            if character == 0 {
+                break;
+            }
+        }
+
+        (pos.line as usize, col)
+    } else if encoding_kind == PositionEncodingKind::UTF32 {
+        // Unicode characters
+        (pos.line as usize, pos.character as usize)
+    } else {
+        panic!("unknown position encoding: {encoding_kind:?}")
+    }
+}
+
+#[allow(dead_code)]
+fn lsp_position(
+    b: &Buffer,
+    line: usize,
+    col: usize,
+    encoding_kind: PositionEncodingKind,
+) -> Position {
+    if encoding_kind == PositionEncodingKind::UTF8 {
+        // Raw bytes
+        let line_start = b.txt.line_to_char(line);
+        let start_idx = b.txt.char_to_byte(line_start);
+        let character = b.txt.char_to_byte(line_start + col) - start_idx;
+
+        Position::new(line as u32, character as u32)
+    } else if encoding_kind == PositionEncodingKind::UTF16 {
+        // Javascript / MS
+        let slice = b.txt.line(line);
+        let mut buf = [0; 2];
+        let mut character = 0;
+
+        // FIXME: this almost certainly doesn't actually work...
+        for ch in slice.chars().take(col) {
+            character += ch.encode_utf16(&mut buf).len();
+        }
+
+        Position::new(line as u32, character as u32)
+    } else if encoding_kind == PositionEncodingKind::UTF32 {
+        // Unicode characters
+        Position::new(line as u32, col as u32)
+    } else {
+        panic!("unknown position encoding: {encoding_kind:?}")
+    }
 }
