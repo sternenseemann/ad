@@ -400,6 +400,14 @@ where
             JumpListForward => self.jump_forward(),
             JumpListBack => self.jump_backward(),
             LoadDot { new_window } => self.default_load_dot(source, new_window),
+            LspShowCapabilities => {
+                if let Some((name, txt)) = self
+                    .lsp_manager
+                    .show_server_capabilities(self.layout.active_buffer())
+                {
+                    self.layout.open_virtual(name, txt, true)
+                }
+            }
             LspStart => {
                 if let Some(msg) = self.lsp_manager.start_client(self.layout.active_buffer()) {
                     self.set_status_message(msg);

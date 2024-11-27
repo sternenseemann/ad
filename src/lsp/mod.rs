@@ -120,6 +120,19 @@ impl LspManagerHandle {
         };
     }
 
+    pub fn show_server_capabilities(&self, b: &Buffer) -> Option<(&'static str, String)> {
+        let lang = &self.config_for_buffer(b)?.lang;
+        let txt = self
+            .capabilities
+            .read()
+            .unwrap()
+            .get(lang)?
+            .1
+            .as_pretty_json()?;
+
+        Some((LSP_FILE, txt))
+    }
+
     pub fn goto_definition(&mut self, b: &Buffer) {
         if let Some((id, encoding)) = self.lsp_id_and_encoding_for(b) {
             let file = b.full_name();

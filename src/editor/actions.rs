@@ -74,6 +74,7 @@ pub enum Action {
     JumpListForward,
     JumpListBack,
     LoadDot { new_window: bool },
+    LspShowCapabilities,
     LspStart,
     LspStop,
     LspGotoDefinition,

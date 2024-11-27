@@ -35,6 +35,10 @@ impl Capabilities {
             position_encoding,
         })
     }
+
+    pub(crate) fn as_pretty_json(&self) -> Option<String> {
+        serde_json::to_string_pretty(&self.inner).ok()
+    }
 }
 
 // NOTE: The LSP spec explicitly calls out needing to support \n, \r and \r\n line
