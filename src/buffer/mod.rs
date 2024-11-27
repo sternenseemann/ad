@@ -76,7 +76,15 @@ impl BufferKind {
         }
     }
 
-    /// The directory containing the file backing this buffer so long as it has kind `File`.
+    /// The path for the file backing this buffer (if any).
+    fn path(&self) -> Option<&Path> {
+        match &self {
+            BufferKind::File(p) => Some(p.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// The directory containing the file backing this buffer (if any).
     fn dir(&self) -> Option<&Path> {
         match &self {
             BufferKind::File(p) => p.parent(),
@@ -344,9 +352,14 @@ impl Buffer {
         }
     }
 
-    /// The directory containing the file backing this buffer so long as it has kind `File`.
+    /// The directory containing the file backing this buffer (if any).
     pub fn dir(&self) -> Option<&Path> {
         self.kind.dir()
+    }
+
+    /// The path for the file backing this buffer (if any).
+    pub fn path(&self) -> Option<&Path> {
+        self.kind.path()
     }
 
     /// The key for the +output buffer that output from command run from this buffer should be

@@ -8,6 +8,7 @@ use crate::lsp::{
 };
 use lsp_types::{TextDocumentIdentifier, TextDocumentPositionParams};
 use std::{
+    ffi::OsStr,
     io::{self, BufRead, BufReader},
     process::{self, ChildStdin, Command, Stdio},
     str::FromStr,
@@ -29,8 +30,6 @@ pub enum Status {
     Running,
 }
 
-// TODO: probably need to track capabilities in case the server we're talking to doesn't support
-//       some of the actions we want to make use of.
 /// A simple LSP client that talks to a single lsp server subprocess over stdin / stdout
 #[derive(Debug)]
 pub struct LspClient {
@@ -50,8 +49,13 @@ impl LspClient {
     /// Stdin for the server is held within the client and can be used via the [LspClient::write]
     /// method to communicate with the server. Messages coming from the server are sent over `tx`
     /// for centeral processing in the main editor event loop and errors are logged.
-    pub fn new(lsp_id: usize, cmd: &str, tx: Sender<Req>) -> io::Result<Self> {
+    pub fn new<I, S>(lsp_id: usize, cmd: &str, args: I, tx: Sender<Req>) -> io::Result<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
         let mut proc = Command::new(cmd)
+            .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -158,6 +162,7 @@ impl LspClient {
                     position_encodings: Some(vec![
                         PositionEncodingKind::UTF32,
                         PositionEncodingKind::UTF8,
+                        PositionEncodingKind::UTF16,
                     ]),
                     ..Default::default()
                 }),

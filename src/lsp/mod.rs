@@ -10,6 +10,7 @@ use crate::{
     lsp::{
         capabilities::{Capabilities, PositionEncoding},
         client::{LspClient, LspMessage, Status},
+        lang::{built_in_configs, LspConfig},
         msg::{Message, Request, RequestId, Response},
         notifications::try_parse_notification,
     },
@@ -27,6 +28,7 @@ use tracing::{error, warn};
 
 mod capabilities;
 mod client;
+mod lang;
 mod msg;
 mod notifications;
 
@@ -39,6 +41,7 @@ enum Req {
     Start {
         lang: String,
         cmd: String,
+        args: Vec<String>,
         root: String,
     },
     Stop {
@@ -52,6 +55,7 @@ enum Req {
 pub struct LspManagerHandle {
     tx_req: Sender<Req>,
     capabilities: Arc<RwLock<HashMap<String, (usize, Capabilities)>>>,
+    configs: Vec<LspConfig>,
 }
 
 impl LspManagerHandle {
@@ -63,37 +67,53 @@ impl LspManagerHandle {
         }
     }
 
-    // FIXME: hardcoded for rust just now
-    fn lang_from_filepath(&self, file: &str) -> Option<String> {
-        if file.ends_with("rs") {
-            return Some("rust".to_string());
-        }
-
-        None
-    }
-
     /// Will return None if there is no active client with recorded capabilities for the
     /// given language.
-    fn lsp_id_and_encoding_for(&self, file: &str) -> Option<(usize, PositionEncoding)> {
-        let lang = self.lang_from_filepath(file)?;
+    fn lsp_id_and_encoding_for(&self, b: &Buffer) -> Option<(usize, PositionEncoding)> {
+        let lang = &self.config_for_buffer(b)?.lang;
 
         self.capabilities
             .read()
             .unwrap()
-            .get(&lang)
+            .get(lang)
             .map(|(id, caps)| (*id, caps.position_encoding))
     }
 
-    pub fn start_client(&self, lang: String, cmd: String, root: String) {
-        let req = Req::Start { lang, cmd, root };
-        if let Err(e) = self.tx_req.send(req) {
-            die!("LSP manager died: {e}")
+    fn config_for_buffer(&self, b: &Buffer) -> Option<&LspConfig> {
+        let os_ext = b.path()?.extension()?;
+        let ext = os_ext.to_str()?;
+        self.configs
+            .iter()
+            .find(|c| c.extensions.iter().any(|e| e == ext))
+    }
+
+    fn start_req_for_buf(&self, b: &Buffer) -> Option<Req> {
+        let config = self.config_for_buffer(b)?;
+        let root = config.root_for_buffer(b)?.to_str()?.to_owned();
+
+        Some(Req::Start {
+            lang: config.lang.clone(),
+            cmd: config.cmd.clone(),
+            args: config.args.clone(),
+            root,
+        })
+    }
+
+    pub fn start_client(&self, b: &Buffer) -> Option<&'static str> {
+        match self.start_req_for_buf(b) {
+            Some(req) => {
+                if let Err(e) = self.tx_req.send(req) {
+                    die!("LSP manager died: {e}")
+                }
+                None
+            }
+
+            None => Some("no LSP available for buffer"),
         }
     }
 
     pub fn stop_client(&mut self, b: &Buffer) {
-        let file = b.full_name();
-        if let Some((lsp_id, _)) = self.lsp_id_and_encoding_for(file) {
+        if let Some((lsp_id, _)) = self.lsp_id_and_encoding_for(b) {
             if let Err(e) = self.tx_req.send(Req::Stop { lsp_id }) {
                 die!("LSP manager died: {e}")
             }
@@ -101,8 +121,8 @@ impl LspManagerHandle {
     }
 
     pub fn goto_definition(&mut self, b: &Buffer) {
-        let file = b.full_name();
-        if let Some((id, encoding)) = self.lsp_id_and_encoding_for(file) {
+        if let Some((id, encoding)) = self.lsp_id_and_encoding_for(b) {
+            let file = b.full_name();
             let (y, x) = b.dot.active_cur().as_yx(b);
             let (line, character) = encoding.lsp_position(b, y, x);
             let p = PendingParams::GotoDefinition(Pos::new(file, line, character));
@@ -112,8 +132,8 @@ impl LspManagerHandle {
     }
 
     pub fn hover(&mut self, b: &Buffer) {
-        let file = b.full_name();
-        if let Some((id, encoding)) = self.lsp_id_and_encoding_for(file) {
+        if let Some((id, encoding)) = self.lsp_id_and_encoding_for(b) {
+            let file = b.full_name();
             let (y, x) = b.dot.active_cur().as_yx(b);
             let (line, character) = encoding.lsp_position(b, y, x);
             let p = PendingParams::Hover(Pos::new(file, line, character));
@@ -156,13 +176,19 @@ impl LspManager {
         LspManagerHandle {
             tx_req,
             capabilities,
+            configs: built_in_configs(),
         }
     }
 
     fn run(mut self, rx_req: Receiver<Req>) {
         for r in rx_req.into_iter() {
             match r {
-                Req::Start { lang, cmd, root } => self.start_client(lang, cmd, root),
+                Req::Start {
+                    lang,
+                    cmd,
+                    args,
+                    root,
+                } => self.start_client(lang, cmd, args, root),
                 Req::Stop { lsp_id } => self.stop_client(lsp_id),
                 Req::Pending(p) => self.handle_pending(p),
 
@@ -343,9 +369,9 @@ impl LspManager {
         self.send_status(message);
     }
 
-    pub fn start_client(&mut self, lang: String, cmd: String, root: String) {
+    pub fn start_client(&mut self, lang: String, cmd: String, args: Vec<String>, root: String) {
         let lsp_id = self.next_id();
-        let mut client = match LspClient::new(lsp_id, &cmd, self.tx_req.clone()) {
+        let mut client = match LspClient::new(lsp_id, &cmd, args, self.tx_req.clone()) {
             Ok(client) => client,
             Err(e) => {
                 return self.report_error(format!("failed to start LSP server: {e}"));

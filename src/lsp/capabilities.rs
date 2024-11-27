@@ -17,11 +17,13 @@ impl Capabilities {
     pub(crate) fn try_new(res: InitializeResult) -> Option<Self> {
         let position_encoding = match &res.capabilities.position_encoding {
             Some(p) if *p == PositionEncodingKind::UTF8 => PositionEncoding::Utf8,
+            Some(p) if *p == PositionEncodingKind::UTF16 => PositionEncoding::Utf16,
             Some(p) if *p == PositionEncodingKind::UTF32 => PositionEncoding::Utf32,
+            None => PositionEncoding::Utf16, // see quote from the spec below
 
-            _ => {
+            Some(p) => {
                 warn!(
-                    "LSP doesn't support either utf8 or utf32 position encoding: {:?}",
+                    "LSP provided unknown position encoding: {p:?} {:?}",
                     res.server_info
                 );
                 return None;
@@ -61,6 +63,8 @@ impl Capabilities {
 pub(crate) enum PositionEncoding {
     /// Raw bytes
     Utf8,
+    /// Javascript / MS
+    Utf16,
     /// Unicode code points
     Utf32,
 }
@@ -82,23 +86,25 @@ impl PositionEncoding {
                 (pos.line as usize, col)
             }
 
+            Self::Utf16 => {
+                let slice = b.txt.line(pos.line as usize);
+                let mut character = pos.character as usize;
+                let mut buf = [0; 2];
+                let mut col = 0;
+                for (idx, ch) in slice.chars().enumerate() {
+                    let n = ch.encode_utf16(&mut buf).len();
+                    col = idx;
+                    character -= n;
+                    if character == 0 {
+                        break;
+                    }
+                }
+
+                (pos.line as usize, col)
+            }
+
             Self::Utf32 => (pos.line as usize, pos.character as usize),
         }
-
-        // untested utf-16 impl (Javascript / MS)
-        // let slice = b.txt.line(pos.line as usize);
-        // let mut character = pos.character as usize;
-        // let mut buf = [0; 2];
-        // let mut col = 0;
-        // for (idx, ch) in slice.chars().enumerate() {
-        //     let n = ch.encode_utf16(&mut buf).len();
-        //     col = idx;
-        //     character -= n;
-        //     if character == 0 {
-        //         break;
-        //     }
-        // }
-        // (pos.line as usize, col)
     }
 
     pub(crate) fn lsp_position(&self, b: &Buffer, line: usize, col: usize) -> (u32, u32) {
@@ -111,17 +117,19 @@ impl PositionEncoding {
                 (line as u32, character as u32)
             }
 
+            Self::Utf16 => {
+                let slice = b.txt.line(line);
+                let mut buf = [0; 2];
+                let mut character = 0;
+                for ch in slice.chars().take(col) {
+                    character += ch.encode_utf16(&mut buf).len();
+                }
+
+                (line as u32, character as u32)
+            }
+
             Self::Utf32 => (line as u32, col as u32),
         }
-
-        // untested utf-16 impl (Javascript / MS)
-        // let slice = b.txt.line(line);
-        // let mut buf = [0; 2];
-        // let mut character = 0;
-        // for ch in slice.chars().take(col) {
-        //     character += ch.encode_utf16(&mut buf).len();
-        // }
-        // Position::new(line as u32, character as u32)
     }
 }
 

@@ -400,19 +400,16 @@ where
             JumpListForward => self.jump_forward(),
             JumpListBack => self.jump_backward(),
             LoadDot { new_window } => self.default_load_dot(source, new_window),
-
-            // FIXME: hard coded values for initial testing
-            LspStart => self.lsp_manager.start_client(
-                "rust".to_string(),
-                "rust-analyzer".to_string(),
-                "/home/sminez/repos/personal/ad".to_string(),
-            ),
+            LspStart => {
+                if let Some(msg) = self.lsp_manager.start_client(self.layout.active_buffer()) {
+                    self.set_status_message(msg);
+                }
+            }
             LspStop => self.lsp_manager.stop_client(self.layout.active_buffer()),
             LspGotoDefinition => self
                 .lsp_manager
                 .goto_definition(self.layout.active_buffer()),
             LspHover => self.lsp_manager.hover(self.layout.active_buffer()),
-
             MarkClean { bufid } => self.mark_clean(bufid),
             NewEditLogTransaction => self.layout.active_buffer_mut().new_edit_log_transaction(),
             NewColumn => self.layout.new_column(),

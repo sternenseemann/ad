@@ -1,6 +1,6 @@
 //! Utility functions
 use crate::editor::built_in_commands;
-use std::{iter::Peekable, str::Chars};
+use std::{iter::Peekable, path::Path, str::Chars};
 use tracing::warn;
 
 /// Pull in data from the ad crate itself to auto-generate the docs on the functionality
@@ -51,4 +51,11 @@ pub(crate) fn normalize_line_endings(mut s: String) -> String {
     warn!("normalizing \\r characters to \\n");
     s = s.replace("\r\n", "\n");
     s.replace("\r", "\n")
+}
+
+/// Locate the first parent directory containing a target file
+pub(crate) fn parent_dir_containing<'a>(initial: &'a Path, target: &str) -> Option<&'a Path> {
+    initial
+        .ancestors()
+        .find(|&p| p.is_dir() && p.join(target).exists())
 }
