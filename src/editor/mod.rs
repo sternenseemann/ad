@@ -32,7 +32,7 @@ mod commands;
 mod minibuffer;
 mod mouse;
 
-pub(crate) use actions::{Action, Actions, Coords, ViewPort};
+pub(crate) use actions::{Action, Actions, ViewPort};
 pub(crate) use built_in_commands::built_in_commands;
 pub(crate) use minibuffer::{MiniBufferSelection, MiniBufferState};
 pub(crate) use mouse::Click;

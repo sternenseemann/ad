@@ -5,27 +5,32 @@
 use crate::{
     buffer::Buffer,
     die,
-    editor::{Action, Actions, Coords, ViewPort},
+    editor::{Action, Actions, ViewPort},
     input::Event,
     lsp::{
+        capabilities::{Capabilities, PositionEncoding},
         client::{LspClient, LspMessage, Status},
         msg::{Message, Request, RequestId, Response},
         notifications::try_parse_notification,
     },
 };
-use lsp_types::{
-    GotoDefinitionResponse, Hover, Location, NumberOrString, Position, PositionEncodingKind, Range,
-};
+use lsp_types::{GotoDefinitionResponse, Hover, NumberOrString};
 use std::{
     collections::HashMap,
-    sync::mpsc::{channel, Receiver, Sender},
+    sync::{
+        mpsc::{channel, Receiver, Sender},
+        Arc, RwLock,
+    },
     thread::spawn,
 };
 use tracing::{error, warn};
 
+mod capabilities;
 mod client;
 mod msg;
 mod notifications;
+
+pub use capabilities::Coords;
 
 const LSP_FILE: &str = "+lsp";
 
@@ -37,7 +42,7 @@ enum Req {
         root: String,
     },
     Stop {
-        lang: String,
+        lsp_id: usize,
     },
     Pending(PendingRequest),
     Message(LspMessage),
@@ -46,12 +51,13 @@ enum Req {
 #[derive(Debug)]
 pub struct LspManagerHandle {
     tx_req: Sender<Req>,
+    capabilities: Arc<RwLock<HashMap<String, (usize, Capabilities)>>>,
 }
 
 impl LspManagerHandle {
     #[inline]
-    fn send(&self, lang: String, pending: PendingParams) {
-        let req = Req::Pending(PendingRequest { lang, pending });
+    fn send(&self, lsp_id: usize, pending: PendingParams) {
+        let req = Req::Pending(PendingRequest { lsp_id, pending });
         if let Err(e) = self.tx_req.send(req) {
             die!("LSP manager died: {e}")
         }
@@ -66,6 +72,18 @@ impl LspManagerHandle {
         None
     }
 
+    /// Will return None if there is no active client with recorded capabilities for the
+    /// given language.
+    fn lsp_id_and_encoding_for(&self, file: &str) -> Option<(usize, PositionEncoding)> {
+        let lang = self.lang_from_filepath(file)?;
+
+        self.capabilities
+            .read()
+            .unwrap()
+            .get(&lang)
+            .map(|(id, caps)| (*id, caps.position_encoding))
+    }
+
     pub fn start_client(&self, lang: String, cmd: String, root: String) {
         let req = Req::Start { lang, cmd, root };
         if let Err(e) = self.tx_req.send(req) {
@@ -75,8 +93,8 @@ impl LspManagerHandle {
 
     pub fn stop_client(&mut self, b: &Buffer) {
         let file = b.full_name();
-        if let Some(lang) = self.lang_from_filepath(file) {
-            if let Err(e) = self.tx_req.send(Req::Stop { lang }) {
+        if let Some((lsp_id, _)) = self.lsp_id_and_encoding_for(file) {
+            if let Err(e) = self.tx_req.send(Req::Stop { lsp_id }) {
                 die!("LSP manager died: {e}")
             }
         };
@@ -84,29 +102,35 @@ impl LspManagerHandle {
 
     pub fn goto_definition(&mut self, b: &Buffer) {
         let file = b.full_name();
-        if let Some(lang) = self.lang_from_filepath(file) {
-            let (line, character) = b.dot.active_cur().as_yx(b);
-            let p = PendingParams::GotoDefinition(Pos::new(file, line as u32, character as u32));
-            self.send(lang, p)
+        if let Some((id, encoding)) = self.lsp_id_and_encoding_for(file) {
+            let (y, x) = b.dot.active_cur().as_yx(b);
+            let (line, character) = encoding.lsp_position(b, y, x);
+            let p = PendingParams::GotoDefinition(Pos::new(file, line, character));
+
+            self.send(id, p)
         }
     }
 
     pub fn hover(&mut self, b: &Buffer) {
         let file = b.full_name();
-        if let Some(lang) = self.lang_from_filepath(file) {
-            let (line, character) = b.dot.active_cur().as_yx(b);
-            let p = PendingParams::Hover(Pos::new(file, line as u32, character as u32));
-            self.send(lang, p)
+        if let Some((id, encoding)) = self.lsp_id_and_encoding_for(file) {
+            let (y, x) = b.dot.active_cur().as_yx(b);
+            let (line, character) = encoding.lsp_position(b, y, x);
+            let p = PendingParams::Hover(Pos::new(file, line, character));
+
+            self.send(id, p)
         }
     }
 }
 
 #[derive(Debug)]
 pub struct LspManager {
-    clients: HashMap<String, LspClient>,
-    // map of (lspID, ReqID) -> in-flight requests we need a response for
+    clients: HashMap<usize, LspClient>,
+    // lang -> (lspID, server capabilities)
+    capabilities: Arc<RwLock<HashMap<String, (usize, Capabilities)>>>,
+    // (lspID, ReqID) -> in-flight requests we need a response for
     pending: HashMap<(usize, RequestId), Pending>,
-    // map of lspID -> map of progress token -> title
+    // lspID -> map of progress token -> title
     progress_tokens: HashMap<usize, HashMap<NumberOrString, String>>,
     tx_req: Sender<Req>,
     tx_events: Sender<Event>,
@@ -118,6 +142,7 @@ impl LspManager {
         let (tx_req, rx_req) = channel();
         let manager = Self {
             clients: Default::default(),
+            capabilities: Default::default(),
             pending: Default::default(),
             progress_tokens: Default::default(),
             tx_req: tx_req.clone(),
@@ -125,16 +150,20 @@ impl LspManager {
             next_id: 0,
         };
 
+        let capabilities = manager.capabilities.clone();
         spawn(move || manager.run(rx_req));
 
-        LspManagerHandle { tx_req }
+        LspManagerHandle {
+            tx_req,
+            capabilities,
+        }
     }
 
     fn run(mut self, rx_req: Receiver<Req>) {
         for r in rx_req.into_iter() {
             match r {
                 Req::Start { lang, cmd, root } => self.start_client(lang, cmd, root),
-                Req::Stop { lang } => self.stop_client(lang),
+                Req::Stop { lsp_id } => self.stop_client(lsp_id),
                 Req::Pending(p) => self.handle_pending(p),
 
                 Req::Message(LspMessage { lsp_id, msg }) => match msg {
@@ -155,8 +184,8 @@ impl LspManager {
         }
     }
 
-    fn handle_pending(&mut self, PendingRequest { lang, pending }: PendingRequest) {
-        let client = match self.clients.get_mut(&lang) {
+    fn handle_pending(&mut self, PendingRequest { lsp_id, pending }: PendingRequest) {
+        let client = match self.clients.get_mut(&lsp_id) {
             Some(client) => match client.status {
                 Status::Running => client,
                 Status::Initializing => {
@@ -164,10 +193,7 @@ impl LspManager {
                     return;
                 }
             },
-            None => {
-                self.send_status(format!("no attached LSP client for {lang}"));
-                return;
-            }
+            None => return self.send_status("no attached LSP client for buffer"),
         };
 
         match pending {
@@ -246,11 +272,10 @@ impl LspManager {
 
         let actions = match p {
             Pending::Initialize(lang) => {
-                // TODO: handle error in initializing
-                //       handle storing capabilities
-                let (_id, _data) = extract!(Initialize, res);
+                let (_id, res) = extract!(Initialize, res);
+                let res = res.unwrap_or_default();
 
-                let client = match self.clients.get_mut(&lang) {
+                let client = match self.clients.get_mut(&lsp_id) {
                     Some(client) => client,
                     None => {
                         self.send_status(format!("no attached LSP client for {lang}"));
@@ -258,17 +283,31 @@ impl LspManager {
                     }
                 };
 
-                if let Err(e) = client.ack_initialized() {
-                    self.report_error(format!("error initializing LSP client: {e}"));
-                    return;
-                }
-                client.status = Status::Running;
+                match Capabilities::try_new(res) {
+                    Some(c) => {
+                        if let Err(e) = client.ack_initialized() {
+                            self.report_error(format!("error initializing LSP client: {e}"));
+                            return;
+                        }
+                        client.status = Status::Running;
+                        client.position_encoding = c.position_encoding;
+                        self.capabilities.write().unwrap().insert(lang, (lsp_id, c));
+                    }
+
+                    None => {
+                        error!("LSP client only supports utf-16 offset encoding");
+                        self.stop_client(lsp_id);
+                    }
+                };
+
                 return;
             }
 
             Pending::GotoDefinition => {
                 let (_id, data) = extract!(GotoDefinition, res);
-                handle_goto_definition(data)
+                self.clients
+                    .get(&lsp_id)
+                    .and_then(|client| handle_goto_definition(data, client.position_encoding))
             }
 
             Pending::Hover => {
@@ -319,21 +358,21 @@ impl LspManager {
             }
         };
 
-        self.clients.insert(lang.clone(), client);
+        self.clients.insert(lsp_id, client);
         self.pending
             .insert((lsp_id, req_id), Pending::Initialize(lang));
         self.send_status("LSP server started")
     }
 
-    pub fn stop_client(&mut self, lang: String) {
-        let client = match self.clients.remove(&lang) {
+    pub fn stop_client(&mut self, lsp_id: usize) {
+        let client = match self.clients.remove(&lsp_id) {
             Some(client) => client,
-            None => return self.report_error("no attached LSP client"),
+            None => return self.report_error("no attached LSP server"),
         };
 
         let cmd = client.cmd.clone();
         let message = match client.shutdown_and_exit() {
-            Ok(_) => "LSP client shutdown".to_string(),
+            Ok(_) => "LSP server shutdown".to_string(),
             Err(e) => {
                 format!("error shutting down LSP({cmd}): {e}")
             }
@@ -361,7 +400,7 @@ impl Pos {
 
 #[derive(Debug)]
 struct PendingRequest {
-    lang: String,
+    lsp_id: usize,
     pending: PendingParams,
 }
 
@@ -378,11 +417,14 @@ enum Pending {
     Hover,
 }
 
-fn handle_goto_definition(data: Option<Option<GotoDefinitionResponse>>) -> Option<Actions> {
+fn handle_goto_definition(
+    data: Option<Option<GotoDefinitionResponse>>,
+    p: PositionEncoding,
+) -> Option<Actions> {
     match data {
         None | Some(None) => None,
         Some(Some(GotoDefinitionResponse::Scalar(loc))) => {
-            let (path, coords) = parse_loc(loc);
+            let (path, coords) = Coords::new(loc, p);
 
             Some(Actions::Multi(vec![
                 Action::OpenFile { path },
@@ -392,7 +434,7 @@ fn handle_goto_definition(data: Option<Option<GotoDefinitionResponse>>) -> Optio
         }
 
         Some(Some(GotoDefinitionResponse::Array(mut locs))) => {
-            let (path, coords) = parse_loc(locs.remove(0));
+            let (path, coords) = Coords::new(locs.remove(0), p);
 
             Some(Actions::Multi(vec![
                 Action::OpenFile { path },
@@ -442,123 +484,4 @@ fn handle_hover(data: Option<Option<Hover>>) -> Option<Actions> {
         name: LSP_FILE.to_string(),
         txt,
     }))
-}
-
-fn parse_loc(
-    Location {
-        uri,
-        range: Range { start, end },
-    }: Location,
-) -> (String, Coords) {
-    let filepath = uri.to_string().strip_prefix("file://").unwrap().to_owned();
-    let coords = Coords {
-        start_row: start.line as usize,
-        start_col: start.character as usize,
-        end_row: end.line as usize,
-        end_col: end.character as usize,
-    };
-
-    (filepath, coords)
-}
-
-// The LSP spec explicitly calls out needing to support \n, \r and \r\n line endings which ad
-// doesn't do. Files using \r or \r\n will likely result in malformed positions.
-
-/*
- * The position encodings supported by the client. Client and server
- * have to agree on the same position encoding to ensure that offsets
- * (e.g. character position in a line) are interpreted the same on both
- * side.
- *
- * To keep the protocol backwards compatible the following applies: if
- * the value 'utf-16' is missing from the array of position encodings
- * servers can assume that the client supports UTF-16. UTF-16 is
- * therefore a mandatory encoding.
- *
- * If omitted it defaults to ['utf-16'].
- *
- * Implementation considerations: since the conversion from one encoding
- * into another requires the content of the file / line the conversion
- * is best done where the file is read which is usually on the server
- * side.
- *
- * @since 3.17.0
- */
-
-#[allow(dead_code)]
-fn parse_lsp_position(
-    b: &Buffer,
-    pos: Position,
-    encoding_kind: PositionEncodingKind,
-) -> (usize, usize) {
-    let pos_line = pos.line as usize;
-    if pos_line > b.len_lines() - 1 {
-        warn!("LSP position out of bounds, clamping to EOF");
-        return (b.len_lines().saturating_sub(1), b.len_chars());
-    }
-
-    if encoding_kind == PositionEncodingKind::UTF8 {
-        // Raw bytes
-        let line_start = b.txt.line_to_char(pos.line as usize);
-        let byte_idx = b.txt.char_to_byte(line_start + pos.character as usize);
-        let col = b.txt.byte_to_char(byte_idx);
-
-        (pos.line as usize, col)
-    } else if encoding_kind == PositionEncodingKind::UTF16 {
-        // Javascript / MS
-        let slice = b.txt.line(pos.line as usize);
-        let mut character = pos.character as usize;
-        let mut buf = [0; 2];
-        let mut col = 0;
-
-        for (idx, ch) in slice.chars().enumerate() {
-            let n = ch.encode_utf16(&mut buf).len();
-            col = idx;
-            character -= n;
-            if character == 0 {
-                break;
-            }
-        }
-
-        (pos.line as usize, col)
-    } else if encoding_kind == PositionEncodingKind::UTF32 {
-        // Unicode characters
-        (pos.line as usize, pos.character as usize)
-    } else {
-        panic!("unknown position encoding: {encoding_kind:?}")
-    }
-}
-
-#[allow(dead_code)]
-fn lsp_position(
-    b: &Buffer,
-    line: usize,
-    col: usize,
-    encoding_kind: PositionEncodingKind,
-) -> Position {
-    if encoding_kind == PositionEncodingKind::UTF8 {
-        // Raw bytes
-        let line_start = b.txt.line_to_char(line);
-        let start_idx = b.txt.char_to_byte(line_start);
-        let character = b.txt.char_to_byte(line_start + col) - start_idx;
-
-        Position::new(line as u32, character as u32)
-    } else if encoding_kind == PositionEncodingKind::UTF16 {
-        // Javascript / MS
-        let slice = b.txt.line(line);
-        let mut buf = [0; 2];
-        let mut character = 0;
-
-        // FIXME: this almost certainly doesn't actually work...
-        for ch in slice.chars().take(col) {
-            character += ch.encode_utf16(&mut buf).len();
-        }
-
-        Position::new(line as u32, character as u32)
-    } else if encoding_kind == PositionEncodingKind::UTF32 {
-        // Unicode characters
-        Position::new(line as u32, col as u32)
-    } else {
-        panic!("unknown position encoding: {encoding_kind:?}")
-    }
 }

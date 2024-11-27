@@ -2,10 +2,11 @@
 use crate::{
     config_handle,
     dot::{find::find_forward_wrapping, Cur, Dot, Range, TextObject},
-    editor::{Action, Coords},
+    editor::Action,
     exec::{Addr, Address, IterBoundedChars},
     fsys::InputFilter,
     key::Input,
+    lsp::Coords,
     util::normalize_line_endings,
     MAX_NAME_LEN, UNNAMED_BUFFER,
 };
@@ -762,7 +763,7 @@ impl Buffer {
     }
 
     fn set_dot_from_coords(&mut self, coords: Coords) {
-        let mut addr: Addr = coords.into();
+        let mut addr: Addr = coords.as_addr(self);
         self.dot = self.map_addr(&mut addr);
         self.dot.clamp_idx(self.txt.len_chars());
         self.xdot.clamp_idx(self.txt.len_chars());

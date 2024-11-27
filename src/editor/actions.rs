@@ -5,9 +5,10 @@ use crate::{
     config_handle,
     dot::{Cur, Dot, Range, TextObject},
     editor::{Editor, MiniBufferSelection},
-    exec::{Addr, AddrBase, Address, Program},
+    exec::{Addr, Address, Program},
     fsys::LogEvent,
     key::{Arrow, Input},
+    lsp::Coords,
     mode::Mode,
     plumb::{MatchOutcome, PlumbingMessage},
     replace_config,
@@ -40,23 +41,6 @@ pub enum ViewPort {
     Center,
     /// Dot at the top of the viewport
     Top,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Coords {
-    pub start_row: usize,
-    pub start_col: usize,
-    pub end_row: usize,
-    pub end_col: usize,
-}
-
-impl From<Coords> for Addr {
-    fn from(c: Coords) -> Self {
-        Addr::Compound(
-            AddrBase::LineAndColumn(c.start_row, c.start_col).into(),
-            AddrBase::LineAndColumn(c.end_row, c.end_col).into(),
-        )
-    }
 }
 
 /// Supported actions for interacting with the editor state

@@ -2,6 +2,7 @@
 //!
 //! This is not a general purpose client and it is not aiming to support all LSP features.
 use crate::lsp::{
+    capabilities::PositionEncoding,
     msg::{Message, Notification, Request, RequestId},
     Req,
 };
@@ -36,6 +37,7 @@ pub struct LspClient {
     pub(super) status: Status,
     pub(super) id: usize,
     pub(super) cmd: String,
+    pub(super) position_encoding: PositionEncoding,
     stdin: ChildStdin,
     read_thread: JoinHandle<io::Result<()>>,
     err_thread: JoinHandle<io::Result<()>>,
@@ -81,6 +83,7 @@ impl LspClient {
             status: Status::Initializing,
             id: lsp_id,
             cmd: cmd.to_string(),
+            position_encoding: PositionEncoding::Utf32,
             stdin,
             read_thread,
             err_thread,
@@ -102,22 +105,25 @@ impl LspClient {
     pub fn initialize(&mut self, root: &str) -> io::Result<RequestId> {
         use lsp_types::{
             request::Initialize, ClientCapabilities, DiagnosticClientCapabilities,
-            DiagnosticWorkspaceClientCapabilities, HoverClientCapabilities, InitializeParams,
-            MarkupKind, NumberOrString, TextDocumentClientCapabilities, Uri,
-            WindowClientCapabilities, WorkDoneProgressParams, WorkspaceClientCapabilities,
-            WorkspaceFolder,
+            DiagnosticWorkspaceClientCapabilities, GeneralClientCapabilities,
+            HoverClientCapabilities, InitializeParams, MarkupKind, NumberOrString,
+            PositionEncodingKind, TextDocumentClientCapabilities, Uri, WindowClientCapabilities,
+            WorkDoneProgressParams, WorkspaceClientCapabilities, WorkspaceFolder,
         };
 
-        #[allow(deprecated)] // root_uri
+        let basename = root.split("/").last().unwrap_or_default();
+
+        #[allow(deprecated)] // root_uri, root_path
         let params = InitializeParams {
             process_id: Some(process::id()),
             work_done_progress_params: WorkDoneProgressParams {
                 work_done_token: Some(NumberOrString::String("abc123".to_string())),
             },
+            root_path: Some(root.to_string()),
             root_uri: Some(Uri::from_str(&format!("file://{root}")).unwrap()),
             workspace_folders: Some(vec![WorkspaceFolder {
                 uri: Uri::from_str(&format!("file://{root}")).unwrap(),
-                name: "ad".to_string(),
+                name: basename.to_string(),
             }]),
             capabilities: ClientCapabilities {
                 workspace: Some(WorkspaceClientCapabilities {
@@ -145,6 +151,14 @@ impl LspClient {
                 // -> results in us getting "window/workDoneProgress/create" requests
                 window: Some(WindowClientCapabilities {
                     work_done_progress: Some(true),
+                    ..Default::default()
+                }),
+                general: Some(GeneralClientCapabilities {
+                    // Explicitly not supporting utf-16 for now and seeing how well that works...!
+                    position_encodings: Some(vec![
+                        PositionEncodingKind::UTF32,
+                        PositionEncodingKind::UTF8,
+                    ]),
                     ..Default::default()
                 }),
                 ..Default::default()
