@@ -85,9 +85,10 @@ impl Message {
 }
 
 fn read_msg(r: &mut dyn BufRead) -> io::Result<Option<Vec<u8>>> {
-    let mut size = None;
+    let mut content_length: Option<usize> = None;
     let mut buf = String::new();
 
+    // Consume all headers from an incoming message and parse the content length.
     loop {
         buf.clear();
         if r.read_line(&mut buf)? == 0 {
@@ -95,27 +96,28 @@ fn read_msg(r: &mut dyn BufRead) -> io::Result<Option<Vec<u8>>> {
         }
         if !buf.ends_with("\r\n") {
             return Err(invalid_data!("malformed header: {buf:?}"));
+        } else if buf == "\r\n" {
+            break; // end of headers
         }
-        let buf = &buf[..buf.len() - 2];
-        if buf.is_empty() {
-            break;
-        }
-        let mut parts = buf.splitn(2, ": ");
-        let header_name = parts.next().unwrap();
-        let header_value = parts
-            .next()
-            .ok_or_else(|| invalid_data!("malformed header: {buf:?}"))?;
-        if header_name.eq_ignore_ascii_case("Content-Length") {
-            size = Some(header_value.parse::<usize>().map_err(invalid_data)?);
+        match buf.trim().split_once(": ") {
+            Some((h, v)) if h.eq_ignore_ascii_case("Content-Length") => {
+                content_length = Some(v.parse().map_err(invalid_data)?);
+            }
+            Some(_) => (), // ignored header
+            None => return Err(invalid_data!("malformed header: {buf:?}")),
         }
     }
 
-    let size: usize = size.ok_or_else(|| invalid_data!("no Content-Length"))?;
-    let mut buf = buf.into_bytes();
-    buf.resize(size, 0);
-    r.read_exact(&mut buf)?;
+    match content_length {
+        None => Err(invalid_data!("no Content-Length header")),
+        Some(len) => {
+            let mut buf = buf.into_bytes();
+            buf.resize(len, 0);
+            r.read_exact(&mut buf)?;
 
-    Ok(Some(buf))
+            Ok(Some(buf))
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
