@@ -134,24 +134,14 @@ impl LspManagerHandle {
     }
 
     pub fn goto_definition(&mut self, b: &Buffer) {
-        if let Some((id, encoding)) = self.lsp_id_and_encoding_for(b) {
-            let file = b.full_name();
-            let (y, x) = b.dot.active_cur().as_yx(b);
-            let (line, character) = encoding.lsp_position(b, y, x);
-            let p = PendingParams::GotoDefinition(Pos::new(file, line, character));
-
-            self.send(id, p)
+        if let Some((id, enc)) = self.lsp_id_and_encoding_for(b) {
+            self.send(id, PendingParams::GotoDefinition(enc.buffer_pos(b)))
         }
     }
 
     pub fn hover(&mut self, b: &Buffer) {
-        if let Some((id, encoding)) = self.lsp_id_and_encoding_for(b) {
-            let file = b.full_name();
-            let (y, x) = b.dot.active_cur().as_yx(b);
-            let (line, character) = encoding.lsp_position(b, y, x);
-            let p = PendingParams::Hover(Pos::new(file, line, character));
-
-            self.send(id, p)
+        if let Some((id, enc)) = self.lsp_id_and_encoding_for(b) {
+            self.send(id, PendingParams::Hover(enc.buffer_pos(b)))
         }
     }
 }
@@ -208,7 +198,6 @@ impl LspManager {
                 Req::Message(LspMessage { lsp_id, msg }) => match msg {
                     Message::Request(r) => self.handle_request(lsp_id, r),
                     Message::Response(r) => self.handle_response(lsp_id, r),
-
                     Message::Notification(n) => {
                         let tokens = self.progress_tokens.entry(lsp_id).or_default();
                         if let Some(actions) = try_parse_notification(n, tokens) {
@@ -286,21 +275,19 @@ impl LspManager {
     fn handle_response(&mut self, lsp_id: usize, res: Response) {
         use lsp_types::request::{GotoDefinition, HoverRequest, Initialize};
 
-        // TODO: need to distinguish between errors being returned explicitly and errors in parsing
-        // the response itself
         macro_rules! extract {
             ($k:ty, $res:expr) => {
                 match $res.extract::<$k>() {
                     Ok(data) => data,
-                    Err(e) => {
-                        error!("malformed LSP response: {e}");
+                    Err((_, e)) => {
+                        error!("dropping malformed LSP response: {e:?}");
                         return;
                     }
                 }
             };
         }
 
-        let req_id = res.id.clone();
+        let req_id = res.id();
         let p = match self.pending.remove(&(lsp_id, req_id)) {
             Some(p) => p,
             None => {
@@ -312,7 +299,6 @@ impl LspManager {
         let actions = match p {
             Pending::Initialize(lang) => {
                 let (_id, res) = extract!(Initialize, res);
-                let res = res.unwrap_or_default();
 
                 let client = match self.clients.get_mut(&lsp_id) {
                     Some(client) => client,
@@ -333,10 +319,8 @@ impl LspManager {
                         self.capabilities.write().unwrap().insert(lang, (lsp_id, c));
                     }
 
-                    None => {
-                        error!("LSP client only supports utf-16 offset encoding");
-                        self.stop_client(lsp_id);
-                    }
+                    // Unknown position encoding that we can't support
+                    None => self.stop_client(lsp_id),
                 };
 
                 return;
@@ -457,12 +441,11 @@ enum Pending {
 }
 
 fn handle_goto_definition(
-    data: Option<Option<GotoDefinitionResponse>>,
+    data: Option<GotoDefinitionResponse>,
     p: PositionEncoding,
 ) -> Option<Actions> {
-    match data {
-        None | Some(None) => None,
-        Some(Some(GotoDefinitionResponse::Scalar(loc))) => {
+    match data? {
+        GotoDefinitionResponse::Scalar(loc) => {
             let (path, coords) = Coords::new(loc, p);
 
             Some(Actions::Multi(vec![
@@ -472,7 +455,7 @@ fn handle_goto_definition(
             ]))
         }
 
-        Some(Some(GotoDefinitionResponse::Array(mut locs))) => {
+        GotoDefinitionResponse::Array(mut locs) => {
             let (path, coords) = Coords::new(locs.remove(0), p);
 
             Some(Actions::Multi(vec![
@@ -482,14 +465,14 @@ fn handle_goto_definition(
             ]))
         }
 
-        Some(Some(GotoDefinitionResponse::Link(links))) => {
+        GotoDefinitionResponse::Link(links) => {
             error!("unhandled goto definition links response: {links:?}");
             None
         }
     }
 }
 
-fn handle_hover(data: Option<Option<Hover>>) -> Option<Actions> {
+fn handle_hover(data: Option<Hover>) -> Option<Actions> {
     use lsp_types::{HoverContents, MarkedString};
 
     let ms_to_string = |ms: MarkedString| match ms {
@@ -497,26 +480,13 @@ fn handle_hover(data: Option<Option<Hover>>) -> Option<Actions> {
         MarkedString::LanguageString(ls) => ls.value,
     };
 
-    let txt = match data {
-        None | Some(None) => return None,
-
-        Some(Some(Hover {
-            contents: HoverContents::Scalar(ms),
-            ..
-        })) => ms_to_string(ms),
-
-        Some(Some(Hover {
-            contents: HoverContents::Array(mss),
-            ..
-        })) => {
+    let txt = match data?.contents {
+        HoverContents::Scalar(ms) => ms_to_string(ms),
+        HoverContents::Markup(mc) => mc.value,
+        HoverContents::Array(mss) => {
             let strs: Vec<_> = mss.into_iter().map(ms_to_string).collect();
             strs.join("\n")
         }
-
-        Some(Some(Hover {
-            contents: HoverContents::Markup(mc),
-            ..
-        })) => mc.value,
     };
 
     Some(Actions::Single(Action::OpenVirtualFile {

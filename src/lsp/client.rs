@@ -3,7 +3,7 @@
 //! This is not a general purpose client and it is not aiming to support all LSP features.
 use crate::lsp::{
     capabilities::PositionEncoding,
-    msg::{Message, Notification, Request, RequestId},
+    msg::{Message, RequestId},
     Req,
 };
 use lsp_types::{TextDocumentIdentifier, TextDocumentPositionParams};
@@ -77,7 +77,7 @@ impl LspClient {
         let cmd_ = cmd.to_string();
         let err_thread = spawn(move || {
             for line in stderr.lines() {
-                println!("lsp error ({cmd_}): {}", line?);
+                error!("LSP({cmd_}): {}", line?);
             }
 
             Ok(())
@@ -99,7 +99,7 @@ impl LspClient {
         let id = self.next_id;
         self.next_id += 1;
 
-        id.into()
+        RequestId::Number(id)
     }
 
     fn write(&mut self, msg: Message) -> io::Result<()> {
@@ -172,7 +172,7 @@ impl LspClient {
         };
 
         let id = self.next_id();
-        self.write(Request::new::<Initialize>(id.clone(), params).into())?;
+        self.write(Message::request::<Initialize>(id.clone(), params))?;
 
         Ok(id)
     }
@@ -180,7 +180,7 @@ impl LspClient {
     pub fn ack_initialized(&mut self) -> io::Result<()> {
         use lsp_types::{notification::Initialized, InitializedParams};
 
-        self.write(Notification::new::<Initialized>(InitializedParams {}).into())
+        self.write(Message::notification::<Initialized>(InitializedParams {}))
     }
 
     pub fn goto_definition(
@@ -198,7 +198,7 @@ impl LspClient {
         };
 
         let id = self.next_id();
-        self.write(Request::new::<GotoDefinition>(id.clone(), params).into())?;
+        self.write(Message::request::<GotoDefinition>(id.clone(), params))?;
 
         Ok(id)
     }
@@ -212,7 +212,7 @@ impl LspClient {
         };
 
         let id = self.next_id();
-        self.write(Request::new::<HoverRequest>(id.clone(), params).into())?;
+        self.write(Message::request::<HoverRequest>(id.clone(), params))?;
 
         Ok(id)
     }
@@ -221,8 +221,8 @@ impl LspClient {
         use lsp_types::{notification::Exit, request::Shutdown};
 
         let id = self.next_id();
-        self.write(Request::new::<Shutdown>(id, ()).into())?;
-        self.write(Notification::new::<Exit>(()).into())?;
+        self.write(Message::request::<Shutdown>(id, ()))?;
+        self.write(Message::notification::<Exit>(()))?;
         self.join();
 
         Ok(())

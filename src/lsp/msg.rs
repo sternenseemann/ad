@@ -3,14 +3,15 @@
 //!
 //! The implementation here is heavily inspired by the lsp-server module found in
 //! rust-analyzer: https://github.com/rust-lang/rust-analyzer/tree/master/lib/lsp-server
-use serde::{Deserialize, Serialize};
+use lsp_types::NumberOrString;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::{
     borrow::Cow,
-    fmt,
     io::{self, BufRead, Write},
 };
-use tracing::trace;
+
+pub type RequestId = NumberOrString;
 
 fn invalid_data(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, error)
@@ -20,52 +21,8 @@ macro_rules! invalid_data {
     ($($tt:tt)*) => (invalid_data(format!($($tt)*)))
 }
 
-fn read_msg_text(r: &mut dyn BufRead) -> io::Result<Option<String>> {
-    let mut size = None;
-    let mut buf = String::new();
-    loop {
-        buf.clear();
-        if r.read_line(&mut buf)? == 0 {
-            return Ok(None);
-        }
-        if !buf.ends_with("\r\n") {
-            return Err(invalid_data!("malformed header: {:?}", buf));
-        }
-        let buf = &buf[..buf.len() - 2];
-        if buf.is_empty() {
-            break;
-        }
-        let mut parts = buf.splitn(2, ": ");
-        let header_name = parts.next().unwrap();
-        let header_value = parts
-            .next()
-            .ok_or_else(|| invalid_data!("malformed header: {:?}", buf))?;
-        if header_name.eq_ignore_ascii_case("Content-Length") {
-            size = Some(header_value.parse::<usize>().map_err(invalid_data)?);
-        }
-    }
-
-    let size: usize = size.ok_or_else(|| invalid_data!("no Content-Length"))?;
-    let mut buf = buf.into_bytes();
-    buf.resize(size, 0);
-    r.read_exact(&mut buf)?;
-    let buf = String::from_utf8(buf).map_err(invalid_data)?;
-    trace!("recv LSP message: {buf}");
-
-    Ok(Some(buf))
-}
-
-fn write_msg_text(w: &mut dyn Write, msg: &str) -> io::Result<()> {
-    trace!("send LSP message: {msg}");
-    write!(w, "Content-Length: {}\r\n\r\n", msg.len())?;
-    w.write_all(msg.as_bytes())?;
-    w.flush()?;
-
-    Ok(())
-}
-
 /// The various message types supported in JSON rpc
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum Message {
     Request(Request),
@@ -74,37 +31,47 @@ pub enum Message {
 }
 
 impl Message {
-    pub fn read(r: &mut impl BufRead) -> io::Result<Option<Self>> {
-        Message::_read(r)
+    pub fn request<R>(id: RequestId, params: R::Params) -> Self
+    where
+        R: lsp_types::request::Request,
+    {
+        Self::Request(Request {
+            id,
+            method: Cow::Borrowed(R::METHOD),
+            params: serde_json::to_value(params).unwrap(),
+        })
     }
 
-    fn _read(r: &mut dyn BufRead) -> io::Result<Option<Self>> {
-        let text = match read_msg_text(r)? {
-            None => return Ok(None),
-            Some(text) => text,
-        };
+    pub fn notification<N>(params: N::Params) -> Self
+    where
+        N: lsp_types::notification::Notification,
+    {
+        Self::Notification(Notification {
+            method: Cow::Borrowed(N::METHOD),
+            params: serde_json::to_value(params).unwrap(),
+        })
+    }
 
-        let msg = match serde_json::from_str(&text) {
-            Ok(msg) => msg,
-            Err(e) => {
-                return Err(invalid_data!("malformed LSP payload: {:?}", e));
-            }
-        };
-
-        Ok(Some(msg))
+    pub fn read(r: &mut impl BufRead) -> io::Result<Option<Self>> {
+        match read_msg(r)? {
+            Some(bytes) => match serde_json::from_slice(&bytes) {
+                Ok(msg) => Ok(Some(msg)),
+                Err(e) => Err(invalid_data!("malformed LSP message: {e:?}")),
+            },
+            None => Ok(None),
+        }
     }
 
     pub fn write(self, w: &mut impl Write) -> io::Result<()> {
-        self._write(w)
-    }
-
-    fn _write(self, w: &mut dyn Write) -> io::Result<()> {
-        let s = serde_json::to_string(&JsonRpc {
+        let data = serde_json::to_vec(&JsonRpc {
             jsonrpc: "2.0",
             msg: self,
         })?;
 
-        return write_msg_text(w, &s);
+        write!(w, "Content-Length: {}\r\n\r\n", data.len())?;
+        w.write_all(&data)?;
+
+        return w.flush();
 
         // Serde structs
 
@@ -117,58 +84,41 @@ impl Message {
     }
 }
 
-#[derive(Debug)]
-pub enum ExtractError<T> {
-    /// The extracted message was of a different method than expected.
-    MethodMismatch(T),
+fn read_msg(r: &mut dyn BufRead) -> io::Result<Option<Vec<u8>>> {
+    let mut size = None;
+    let mut buf = String::new();
 
-    /// The underlying request failed
-    ResponseError(ResponseError),
-
-    /// Failed to deserialize the message.
-    JsonError {
-        method: &'static str,
-        error: serde_json::Error,
-    },
-}
-
-impl std::error::Error for ExtractError<Response> {}
-impl fmt::Display for ExtractError<Response> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ExtractError::MethodMismatch(res) => {
-                write!(f, "Method mismatch for response '{}'", res.id)
-            }
-
-            ExtractError::ResponseError(err) => {
-                write!(f, "Request returned error '{:?}'", err)
-            }
-
-            ExtractError::JsonError { method, error } => {
-                write!(f, "Invalid response\nMethod: {method}\n error: {error}",)
-            }
+    loop {
+        buf.clear();
+        if r.read_line(&mut buf)? == 0 {
+            return Ok(None);
+        }
+        if !buf.ends_with("\r\n") {
+            return Err(invalid_data!("malformed header: {buf:?}"));
+        }
+        let buf = &buf[..buf.len() - 2];
+        if buf.is_empty() {
+            break;
+        }
+        let mut parts = buf.splitn(2, ": ");
+        let header_name = parts.next().unwrap();
+        let header_value = parts
+            .next()
+            .ok_or_else(|| invalid_data!("malformed header: {buf:?}"))?;
+        if header_name.eq_ignore_ascii_case("Content-Length") {
+            size = Some(header_value.parse::<usize>().map_err(invalid_data)?);
         }
     }
+
+    let size: usize = size.ok_or_else(|| invalid_data!("no Content-Length"))?;
+    let mut buf = buf.into_bytes();
+    buf.resize(size, 0);
+    r.read_exact(&mut buf)?;
+
+    Ok(Some(buf))
 }
 
-impl std::error::Error for ExtractError<Notification> {}
-impl fmt::Display for ExtractError<Notification> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ExtractError::MethodMismatch(not) => {
-                write!(f, "Method mismatch for notification '{}'", not.method)
-            }
-
-            ExtractError::ResponseError(_) => unreachable!("only for responses"),
-
-            ExtractError::JsonError { method, error } => {
-                write!(f, "Invalid notification\nMethod: {method}\n error: {error}")
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Request {
     pub id: RequestId,
     pub method: Cow<'static, str>,
@@ -178,78 +128,52 @@ pub struct Request {
 }
 
 impl Request {
-    pub fn new<R>(id: RequestId, params: R::Params) -> Request
+    pub fn extract<R>(self) -> Result<(RequestId, R::Params), serde_json::Error>
     where
         R: lsp_types::request::Request,
     {
-        Self {
-            id,
-            method: Cow::Borrowed(R::METHOD),
-            params: serde_json::to_value(params).unwrap(),
-        }
-    }
-
-    pub fn extract<R>(self) -> Result<(RequestId, R::Params), ExtractError<Request>>
-    where
-        R: lsp_types::request::Request,
-    {
-        if self.method != R::METHOD {
-            return Err(ExtractError::MethodMismatch(self));
-        }
-        match serde_json::from_value(self.params) {
-            Ok(params) => Ok((self.id, params)),
-            Err(error) => Err(ExtractError::JsonError {
-                method: R::METHOD,
-                error,
-            }),
-        }
+        Ok((self.id, serde_json::from_value(self.params)?))
     }
 }
 
-impl From<Request> for Message {
-    fn from(r: Request) -> Self {
-        Message::Request(r)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Response {
-    pub id: RequestId,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<ResponseError>,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum Response {
+    Error { id: RequestId, error: ResponseError },
+    Result { id: RequestId, result: Value },
 }
 
 impl Response {
-    pub fn extract<R>(self) -> Result<(RequestId, Option<R::Result>), ExtractError<Response>>
+    pub fn id(&self) -> RequestId {
+        match self {
+            Self::Result { id, .. } => id.clone(),
+            Self::Error { id, .. } => id.clone(),
+        }
+    }
+
+    pub fn extract<R>(self) -> Result<(RequestId, R::Result), (RequestId, ResponseError)>
     where
         R: lsp_types::request::Request,
     {
-        if let Some(err) = self.error {
-            return Err(ExtractError::ResponseError(err));
-        }
-
-        match self.result {
-            Some(val) => match serde_json::from_value(val) {
-                Ok(res) => Ok((self.id, res)),
-                Err(error) => Err(ExtractError::JsonError {
-                    method: R::METHOD,
-                    error,
-                }),
+        match self {
+            Self::Result { id, result } => match serde_json::from_value(result) {
+                Ok(res) => Ok((id, res)),
+                Err(error) => Err((
+                    id,
+                    ResponseError {
+                        code: ErrorCode::Unknown,
+                        message: error.to_string(),
+                        data: None,
+                    },
+                )),
             },
-            None => Ok((self.id, None)),
+
+            Self::Error { id, error } => Err((id, error)),
         }
     }
 }
 
-impl From<Response> for Message {
-    fn from(r: Response) -> Self {
-        Message::Response(r)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Notification {
     pub method: Cow<'static, str>,
     #[serde(default = "Value::default")]
@@ -257,137 +181,231 @@ pub struct Notification {
     pub params: Value,
 }
 
-impl From<Notification> for Message {
-    fn from(n: Notification) -> Self {
-        Message::Notification(n)
-    }
-}
-
 impl Notification {
-    pub fn new<N>(params: N::Params) -> Notification
+    pub fn extract<N>(self) -> Result<N::Params, serde_json::Error>
     where
         N: lsp_types::notification::Notification,
     {
-        Self {
-            method: Cow::Borrowed(N::METHOD),
-            params: serde_json::to_value(params).unwrap(),
-        }
-    }
-
-    pub fn extract<N>(self) -> Result<N::Params, ExtractError<Notification>>
-    where
-        N: lsp_types::notification::Notification,
-    {
-        if self.method != N::METHOD {
-            return Err(ExtractError::MethodMismatch(self));
-        }
-        match serde_json::from_value(self.params) {
-            Ok(params) => Ok(params),
-            Err(error) => Err(ExtractError::JsonError {
-                method: N::METHOD,
-                error,
-            }),
-        }
+        serde_json::from_value(self.params)
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResponseError {
-    pub code: i32,
+    pub code: ErrorCode,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
 }
 
-// #[derive(Debug, Clone, Copy)]
-// #[non_exhaustive]
-// pub enum ErrorCode {
-//     // Defined by JSON RPC:
-//     ParseError = -32700,
-//     InvalidRequest = -32600,
-//     MethodNotFound = -32601,
-//     InvalidParams = -32602,
-//     InternalError = -32603,
-//     ServerErrorStart = -32099,
-//     ServerErrorEnd = -32000,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCode {
+    // Defined by JSON RPC:
+    ParseError,
+    InvalidRequest,
+    MethodNotFound,
+    InvalidParams,
+    InternalError,
+    ServerErrorStart,
+    ServerErrorEnd,
 
-//     /// Error code indicating that a server received a notification or
-//     /// request before the server has received the `initialize` request.
-//     ServerNotInitialized = -32002,
-//     Unknown = -32001,
+    /// Error code indicating that a server received a notification or
+    /// request before the server has received the `initialize` request.
+    ServerNotInitialized,
+    Unknown,
 
-//     // Defined by the protocol:
-//     /// The client has canceled a request and a server has detected
-//     /// the cancel.
-//     RequestCanceled = -32800,
+    // Defined by the protocol:
+    /// The client has canceled a request and a server has detected
+    /// the cancel.
+    RequestCancelled,
 
-//     /// The server detected that the content of a document got
-//     /// modified outside normal conditions. A server should
-//     /// NOT send this error code if it detects a content change
-//     /// in it unprocessed messages. The result even computed
-//     /// on an older state might still be useful for the client.
-//     ///
-//     /// If a client decides that a result is not of any use anymore
-//     /// the client should cancel the request.
-//     ContentModified = -32801,
+    /// The server detected that the content of a document got
+    /// modified outside normal conditions. A server should
+    /// NOT send this error code if it detects a content change
+    /// in it unprocessed messages. The result even computed
+    /// on an older state might still be useful for the client.
+    ///
+    /// If a client decides that a result is not of any use anymore
+    /// the client should cancel the request.
+    ContentModified,
 
-//     /// The server cancelled the request. This error code should
-//     /// only be used for requests that explicitly support being
-//     /// server cancellable.
-//     ///
-//     /// @since 3.17.0
-//     ServerCancelled = -32802,
+    /// The server cancelled the request. This error code should
+    /// only be used for requests that explicitly support being
+    /// server cancellable.
+    ///
+    /// @since 3.17.0
+    ServerCancelled,
 
-//     /// A request failed but it was syntactically correct, e.g the
-//     /// method name was known and the parameters were valid. The error
-//     /// message should contain human readable information about why
-//     /// the request failed.
-//     ///
-//     /// @since 3.17.0
-//     RequestFailed = -32803,
-// }
+    /// A request failed but it was syntactically correct, e.g the
+    /// method name was known and the parameters were valid. The error
+    /// message should contain human readable information about why
+    /// the request failed.
+    ///
+    /// @since 3.17.0
+    RequestFailed,
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct RequestId(IdInner);
+    /// Catch-all for unknown custom error codes from servers
+    Custom(i32),
+}
 
-impl fmt::Display for RequestId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.0 {
-            IdInner::Num(i) => fmt::Display::fmt(i, f),
-            IdInner::Str(s) => fmt::Debug::fmt(s, f),
-        }
+impl Serialize for ErrorCode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let val = match self {
+            Self::ParseError => -32700,
+            Self::InvalidRequest => -32600,
+            Self::MethodNotFound => -32601,
+            Self::InvalidParams => -32602,
+            Self::InternalError => -32603,
+            Self::ServerErrorStart => -32099,
+            Self::ServerErrorEnd => -32000,
+            Self::ServerNotInitialized => -32002,
+            Self::Unknown => -32001,
+            Self::RequestCancelled => -32800,
+            Self::ContentModified => -32801,
+            Self::ServerCancelled => -32802,
+            Self::RequestFailed => -32803,
+            Self::Custom(i) => *i,
+        };
+
+        serializer.serialize_i32(val)
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(untagged)]
-enum IdInner {
-    Num(i32),
-    Str(String),
-}
+impl<'de> Deserialize<'de> for ErrorCode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let val = match i32::deserialize(deserializer)? {
+            -32700 => Self::ParseError,
+            -32600 => Self::InvalidRequest,
+            -32601 => Self::MethodNotFound,
+            -32602 => Self::InvalidParams,
+            -32603 => Self::InternalError,
+            -32099 => Self::ServerErrorStart,
+            -32000 => Self::ServerErrorEnd,
+            -32002 => Self::ServerNotInitialized,
+            -32001 => Self::Unknown,
+            -32800 => Self::RequestCancelled,
+            -32801 => Self::ContentModified,
+            -32802 => Self::ServerCancelled,
+            -32803 => Self::RequestFailed,
+            i => Self::Custom(i),
+        };
 
-impl From<i32> for RequestId {
-    fn from(id: i32) -> RequestId {
-        RequestId(IdInner::Num(id))
-    }
-}
-
-impl From<String> for RequestId {
-    fn from(id: String) -> RequestId {
-        RequestId(IdInner::Str(id))
+        Ok(val)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lsp_types::{request::Initialize, InitializeParams};
+    use serde_json::json;
+    use simple_test_case::test_case;
+    use std::io::BufReader;
 
+    fn rpc(val: serde_json::Value) -> String {
+        let s = serde_json::to_string(&val).unwrap();
+        let len = s.len();
+
+        format!("Content-Length: {len}\r\n\r\n{s}")
+    }
+
+    #[test_case(
+        rpc(json!({ "id": 1, "method": "foo", "params": {"foo": "bar"} })),
+        Message::Request(Request {
+            id: RequestId::Number(1),
+            method: Cow::Borrowed("foo"),
+            params: json!({"foo": "bar"}),
+        });
+        "simple request"
+    )]
+    #[test_case(
+        rpc(json!({ "id": 1, "result": {"foo": "bar"} })),
+        Message::Response(Response::Result {
+            id: RequestId::Number(1),
+            result: json!({"foo": "bar"}),
+        });
+        "simple successful response"
+    )]
+    #[test_case(
+        rpc(json!({
+            "id": 1,
+            "error": {
+                "code": -32600,
+                "message": "invalid",
+                "data": {"foo": "bar"}
+            }
+        })),
+        Message::Response(Response::Error {
+            id: RequestId::Number(1),
+            error: ResponseError {
+                code: ErrorCode::InvalidRequest,
+                message: "invalid".to_owned(),
+                data: Some(json!({"foo": "bar"})),
+            }
+            
+        });
+        "simple error response with data"
+    )]
+    #[test_case(
+        rpc(json!({
+            "id": 1,
+            "error": {
+                "code": -32600,
+                "message": "invalid",
+            }
+        })),
+        Message::Response(Response::Error {
+            id: RequestId::Number(1),
+            error: ResponseError {
+                code: ErrorCode::InvalidRequest,
+                message: "invalid".to_owned(),
+                data: None,
+            }
+            
+        });
+        "simple error response without data"
+    )]
+    #[test_case(
+        rpc(json!({ "method": "foo", "params": {"foo": "bar"} })),
+        Message::Notification(Notification {
+            method: Cow::Borrowed("foo"),
+            params: json!({"foo": "bar"}),
+        });
+        "simple notification"
+    )]
     #[test]
-    fn new_req_works() {
-        let r = Request::new::<Initialize>(0.into(), InitializeParams::default());
-        let s = serde_json::to_string(&r).unwrap();
-        assert_eq!(s, "");
+    fn read_message(s: String, expected: Message) {
+        let m = Message::read(&mut BufReader::new(s.as_bytes()))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(m, expected);
+    }
+
+    #[test_case(ErrorCode::ParseError; "parse error")]
+    #[test_case(ErrorCode::InvalidRequest; "invalid request")]
+    #[test_case(ErrorCode::MethodNotFound; "method not found")]
+    #[test_case(ErrorCode::InvalidParams; "invalid params")]
+    #[test_case(ErrorCode::InternalError; "internal error")]
+    #[test_case(ErrorCode::ServerErrorStart; "server error start")]
+    #[test_case(ErrorCode::ServerErrorEnd; "server error end")]
+    #[test_case(ErrorCode::ServerNotInitialized; "server not initialized")]
+    #[test_case(ErrorCode::Unknown; "unknown")]
+    #[test_case(ErrorCode::RequestCancelled; "request cancelled")]
+    #[test_case(ErrorCode::ContentModified; "content modified")]
+    #[test_case(ErrorCode::ServerCancelled; "server cancelled")]
+    #[test_case(ErrorCode::RequestFailed; "request failed")]
+    #[test_case(ErrorCode::Custom(42); "custom")]
+    #[test]
+    fn error_code_serde_round_trip(e: ErrorCode) {
+        let s = serde_json::to_string(&e).unwrap();
+        let parsed: ErrorCode = serde_json::from_str(&s).unwrap();
+
+        assert_eq!(parsed, e);
     }
 }

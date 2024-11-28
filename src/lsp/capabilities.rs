@@ -2,6 +2,7 @@
 use crate::{
     buffer::Buffer,
     exec::{Addr, AddrBase},
+    lsp::Pos,
 };
 use lsp_types::{InitializeResult, Location, Position, PositionEncodingKind, ServerCapabilities};
 use tracing::warn;
@@ -111,7 +112,15 @@ impl PositionEncoding {
         }
     }
 
-    pub(crate) fn lsp_position(&self, b: &Buffer, line: usize, col: usize) -> (u32, u32) {
+    pub(super) fn buffer_pos(&self, b: &Buffer) -> Pos {
+        let file = b.full_name();
+        let (y, x) = b.dot.active_cur().as_yx(b);
+        let (line, character) = self.lsp_position(b, y, x);
+
+        Pos::new(file, line, character)
+    }
+
+    fn lsp_position(&self, b: &Buffer, line: usize, col: usize) -> (u32, u32) {
         match self {
             Self::Utf8 => {
                 let line_start = b.txt.line_to_char(line);
