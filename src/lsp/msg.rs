@@ -347,7 +347,6 @@ mod tests {
                 message: "invalid".to_owned(),
                 data: Some(json!({"foo": "bar"})),
             }
-            
         });
         "simple error response with data"
     )]
@@ -366,7 +365,6 @@ mod tests {
                 message: "invalid".to_owned(),
                 data: None,
             }
-            
         });
         "simple error response without data"
     )]
