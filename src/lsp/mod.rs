@@ -13,6 +13,7 @@ use crate::{
         lang::{built_in_configs, LspConfig},
         msg::{Message, Notification, Request, RequestId, Response},
     },
+    util::ReadOnlyLock,
 };
 use lsp_types::{
     GotoDefinitionResponse, Hover, NumberOrString, ProgressParams, PublishDiagnosticsParams, Uri,
@@ -55,8 +56,8 @@ pub(crate) enum Req {
 #[derive(Debug)]
 pub struct LspManagerHandle {
     tx_req: Sender<Req>,
-    capabilities: Arc<RwLock<HashMap<String, (usize, Capabilities)>>>,
-    diagnostics: Arc<RwLock<HashMap<Uri, Vec<Diagnostic>>>>,
+    capabilities: ReadOnlyLock<HashMap<String, (usize, Capabilities)>>,
+    diagnostics: ReadOnlyLock<HashMap<Uri, Vec<Diagnostic>>>,
     configs: Vec<LspConfig>,
 }
 
@@ -160,7 +161,8 @@ impl LspManagerHandle {
         Some((LSP_FILE, txt))
     }
 
-    pub fn show_diagnostics(&self) -> Action {
+    pub fn show_diagnostics(&self, b: &Buffer) -> Action {
+        self.document_changed(b); // to ensure that diagnostics are up to date
         debug!("showing LSP diagnostics");
         let guard = self.diagnostics.read().unwrap();
         let mut diags: Vec<Diagnostic> = guard.values().flatten().cloned().collect();
@@ -255,8 +257,8 @@ impl LspManager {
             next_id: 0,
         };
 
-        let capabilities = manager.capabilities.clone();
-        let diagnostics = manager.diagnostics.clone();
+        let capabilities = ReadOnlyLock::new(manager.capabilities.clone());
+        let diagnostics = ReadOnlyLock::new(manager.diagnostics.clone());
         spawn(move || manager.run(rx_req));
 
         LspManagerHandle {

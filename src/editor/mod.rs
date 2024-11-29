@@ -413,7 +413,9 @@ where
                 }
             }
             LspShowDiagnostics => {
-                let action = self.lsp_manager.show_diagnostics();
+                let action = self
+                    .lsp_manager
+                    .show_diagnostics(self.layout.active_buffer());
                 self.handle_action(action, Source::Fsys);
             }
             LspStart => {
