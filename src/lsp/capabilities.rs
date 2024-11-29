@@ -64,7 +64,7 @@ impl Capabilities {
 /// into another requires the content of the file / line the conversion
 /// is best done where the file is read which is usually on the server
 /// side.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum PositionEncoding {
     /// Raw bytes
     Utf8,
@@ -144,7 +144,7 @@ impl PositionEncoding {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Coords {
     encoding: PositionEncoding,
     start: Position,
@@ -167,6 +167,10 @@ impl Coords {
         };
 
         (filepath, coords)
+    }
+
+    pub fn line(&self) -> u32 {
+        self.start.line
     }
 
     pub fn as_addr(&self, b: &Buffer) -> Addr {

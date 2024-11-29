@@ -5,17 +5,18 @@
 use crate::{
     buffer::{Buffer, Buffers},
     die,
-    editor::{Action, Actions, ViewPort},
+    editor::{Action, Actions, MbSelect, MbSelector, MiniBufferSelection, ViewPort},
     input::Event,
     lsp::{
         capabilities::{Capabilities, PositionEncoding},
         client::{LspClient, LspMessage, Status},
         lang::{built_in_configs, LspConfig},
-        msg::{Message, Request, RequestId, Response},
-        notifications::try_parse_notification,
+        msg::{Message, Notification, Request, RequestId, Response},
     },
 };
-use lsp_types::{GotoDefinitionResponse, Hover, NumberOrString};
+use lsp_types::{
+    GotoDefinitionResponse, Hover, NumberOrString, ProgressParams, PublishDiagnosticsParams, Uri,
+};
 use std::{
     collections::HashMap,
     sync::{
@@ -24,13 +25,12 @@ use std::{
     },
     thread::spawn,
 };
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 mod capabilities;
 mod client;
 mod lang;
 mod msg;
-mod notifications;
 
 pub use capabilities::Coords;
 
@@ -56,6 +56,7 @@ pub(crate) enum Req {
 pub struct LspManagerHandle {
     tx_req: Sender<Req>,
     capabilities: Arc<RwLock<HashMap<String, (usize, Capabilities)>>>,
+    diagnostics: Arc<RwLock<HashMap<Uri, Vec<Diagnostic>>>>,
     configs: Vec<LspConfig>,
 }
 
@@ -65,6 +66,7 @@ impl LspManagerHandle {
         Self {
             tx_req,
             capabilities: Default::default(),
+            diagnostics: Default::default(),
             configs: Default::default(),
         }
     }
@@ -125,6 +127,7 @@ impl LspManagerHandle {
     pub fn start_client(&self, bs: &Buffers) -> Option<&'static str> {
         match self.start_req_for_buf(bs) {
             Some(req) => {
+                debug!("starting LSP server");
                 if let Err(e) = self.tx_req.send(req) {
                     die!("LSP manager died: {e}")
                 }
@@ -137,6 +140,7 @@ impl LspManagerHandle {
 
     pub fn stop_client(&self, b: &Buffer) {
         if let Some((lsp_id, _)) = self.lsp_id_and_encoding_for(b) {
+            debug!("stopping LSP server {lsp_id}");
             if let Err(e) = self.tx_req.send(Req::Stop { lsp_id }) {
                 die!("LSP manager died: {e}")
             }
@@ -156,8 +160,18 @@ impl LspManagerHandle {
         Some((LSP_FILE, txt))
     }
 
+    pub fn show_diagnostics(&self) -> Action {
+        debug!("showing LSP diagnostics");
+        let guard = self.diagnostics.read().unwrap();
+        let mut diags: Vec<Diagnostic> = guard.values().flatten().cloned().collect();
+        diags.sort_unstable();
+
+        Action::MbSelect(Diagnostics(diags).into_selector())
+    }
+
     pub fn document_opened(&self, b: &Buffer) {
         if let Some((id, _)) = self.lsp_id_and_encoding_for(b) {
+            debug!("sending LSP textDocument/didOpen ({id})");
             let path = b.full_name().to_string();
             let content = b.str_contents();
 
@@ -167,6 +181,7 @@ impl LspManagerHandle {
 
     pub fn document_closed(&self, b: &Buffer) {
         if let Some((id, _)) = self.lsp_id_and_encoding_for(b) {
+            debug!("sending LSP textDocument/didClose ({id})");
             let path = b.full_name().to_string();
 
             self.send(id, PendingParams::DocumentClose { path })
@@ -175,6 +190,7 @@ impl LspManagerHandle {
 
     pub fn document_changed(&self, b: &Buffer) {
         if let Some((id, _)) = self.lsp_id_and_encoding_for(b) {
+            debug!("sending LSP textDocument/didChange ({id})");
             let path = b.full_name().to_string();
             let content = b.str_contents();
 
@@ -194,6 +210,7 @@ impl LspManagerHandle {
             if b.dirty {
                 self.document_changed(b);
             }
+            debug!("sending LSP textDocument/definition ({id})");
             self.send(id, PendingParams::GotoDefinition(enc.buffer_pos(b)))
         }
     }
@@ -203,6 +220,7 @@ impl LspManagerHandle {
             if b.dirty {
                 self.document_changed(b);
             }
+            debug!("sending LSP textDocument/hover ({id})");
             self.send(id, PendingParams::Hover(enc.buffer_pos(b)))
         }
     }
@@ -217,6 +235,7 @@ pub struct LspManager {
     pending: HashMap<(usize, RequestId), Pending>,
     // lspID -> map of progress token -> title
     progress_tokens: HashMap<usize, HashMap<NumberOrString, String>>,
+    diagnostics: Arc<RwLock<HashMap<Uri, Vec<Diagnostic>>>>,
     tx_req: Sender<Req>,
     tx_events: Sender<Event>,
     next_id: usize,
@@ -230,17 +249,20 @@ impl LspManager {
             capabilities: Default::default(),
             pending: Default::default(),
             progress_tokens: Default::default(),
+            diagnostics: Default::default(),
             tx_req: tx_req.clone(),
             tx_events,
             next_id: 0,
         };
 
         let capabilities = manager.capabilities.clone();
+        let diagnostics = manager.diagnostics.clone();
         spawn(move || manager.run(rx_req));
 
         LspManagerHandle {
             tx_req,
             capabilities,
+            diagnostics,
             configs: built_in_configs(),
         }
     }
@@ -261,41 +283,39 @@ impl LspManager {
                 Req::Message(LspMessage { lsp_id, msg }) => match msg {
                     Message::Request(r) => self.handle_request(lsp_id, r),
                     Message::Response(r) => self.handle_response(lsp_id, r),
-                    Message::Notification(n) => {
-                        let tokens = self.progress_tokens.entry(lsp_id).or_default();
-                        if let Some(actions) = try_parse_notification(n, tokens) {
-                            if self.tx_events.send(Event::Actions(actions)).is_err() {
-                                warn!("LSP sender actions channel closed: exiting");
-                                return;
-                            }
-                        }
-                    }
+                    Message::Notification(n) => self.handle_notification(lsp_id, n),
                 },
             }
         }
     }
 
     fn handle_pending(&mut self, PendingRequest { lsp_id, pending }: PendingRequest) {
-        let client = match self.clients.get_mut(&lsp_id) {
-            Some(client) => match client.status {
-                Status::Running => client,
-                Status::Initializing => {
-                    self.send_status("LSP server still initializing");
-                    return;
+        // this is a macro as we don't need an attached client for the active buffer in
+        // order to show all diagnostics
+        macro_rules! client {
+            () => {
+                match self.clients.get_mut(&lsp_id) {
+                    Some(client) => match client.status {
+                        Status::Running => client,
+                        Status::Initializing => {
+                            self.send_status("LSP server still initializing");
+                            return;
+                        }
+                    },
+                    None => return self.send_status("no attached LSP client for buffer"),
                 }
-            },
-            None => return self.send_status("no attached LSP client for buffer"),
-        };
+            };
+        }
 
         match pending {
             PendingParams::DocumentOpen { path, content } => {
-                if let Err(e) = client.document_did_open(path, content) {
+                if let Err(e) = client!().document_did_open(path, content) {
                     self.report_error(format!("unable to notify document open: {e}"))
                 }
             }
 
             PendingParams::DocumentClose { path } => {
-                if let Err(e) = client.document_did_close(path) {
+                if let Err(e) = client!().document_did_close(path) {
                     self.report_error(format!("unable to notify document close: {e}"))
                 }
             }
@@ -305,12 +325,13 @@ impl LspManager {
                 content,
                 version,
             } => {
-                if let Err(e) = client.document_did_change(path, content, version) {
+                if let Err(e) = client!().document_did_change(path, content, version) {
                     self.report_error(format!("unable to notify document change: {e}"))
                 }
             }
 
             PendingParams::GotoDefinition(pos) => {
+                let client = client!();
                 match client.goto_definition(&pos.file, pos.line, pos.character) {
                     Ok(req_id) => {
                         self.pending
@@ -324,14 +345,17 @@ impl LspManager {
                 }
             }
 
-            PendingParams::Hover(pos) => match client.hover(&pos.file, pos.line, pos.character) {
-                Ok(req_id) => {
-                    self.pending.insert((client.id, req_id), Pending::Hover);
-                    self.send_status("requesting hover");
-                }
+            PendingParams::Hover(pos) => {
+                let client = client!();
+                match client.hover(&pos.file, pos.line, pos.character) {
+                    Ok(req_id) => {
+                        self.pending.insert((client.id, req_id), Pending::Hover);
+                        self.send_status("requesting hover");
+                    }
 
-                Err(e) => self.report_error(format!("unable to request LSP hover: {e}")),
-            },
+                    Err(e) => self.report_error(format!("unable to request LSP hover: {e}")),
+                }
+            }
         }
     }
 
@@ -434,6 +458,44 @@ impl LspManager {
         }
     }
 
+    pub fn handle_notification(&mut self, lsp_id: usize, n: Notification) {
+        use lsp_types::notification::{Notification as _, Progress, PublishDiagnostics};
+
+        let tokens = self.progress_tokens.entry(lsp_id).or_default();
+
+        let actions = match n.method.as_ref() {
+            Progress::METHOD => match n.extract::<Progress>() {
+                Ok(params) => handle_progress(params, tokens),
+                Err(e) => {
+                    error!("malformed progress notification: {e}");
+                    None
+                }
+            },
+
+            PublishDiagnostics::METHOD => {
+                match n.extract::<PublishDiagnostics>() {
+                    Ok(params) => self.update_diagnostics(lsp_id, params),
+                    Err(e) => error!("malformed diagnostics notification: {e}"),
+                }
+                None
+            }
+
+            _ => {
+                warn!(
+                    "unknown notification from LSP: {}",
+                    serde_json::to_string(&n).unwrap()
+                );
+                None
+            }
+        };
+
+        if let Some(actions) = actions {
+            if self.tx_events.send(Event::Actions(actions)).is_err() {
+                warn!("LSP sender actions channel closed: exiting");
+            }
+        }
+    }
+
     fn next_id(&mut self) -> usize {
         let id = self.next_id;
         self.next_id += 1;
@@ -496,6 +558,31 @@ impl LspManager {
             }
         };
         self.send_status(message);
+    }
+
+    /// Currently throwing away a LOT of the information contained in the payload from the server
+    /// Servers are in control over the state of diagnostics so any push of diagnostic state for
+    /// a given file overwrites our current state
+    fn update_diagnostics(&mut self, lsp_id: usize, params: PublishDiagnosticsParams) {
+        let encoding = match self.clients.get(&lsp_id) {
+            Some(c) => c.position_encoding,
+            None => return,
+        };
+
+        let PublishDiagnosticsParams {
+            uri, diagnostics, ..
+        } = params;
+
+        let new_diagnostics: Vec<Diagnostic> = diagnostics
+            .into_iter()
+            .map(|d| Diagnostic::new(uri.clone(), d, encoding))
+            .collect();
+
+        tracing::info!("new diagnostics: {new_diagnostics:?}");
+
+        let mut guard = self.diagnostics.write().unwrap();
+
+        guard.insert(uri, new_diagnostics);
     }
 }
 
@@ -600,4 +687,120 @@ fn handle_hover(data: Option<Hover>) -> Option<Actions> {
         name: LSP_FILE.to_string(),
         txt,
     }))
+}
+
+fn handle_progress(
+    params: ProgressParams,
+    tokens: &mut HashMap<NumberOrString, String>,
+) -> Option<Actions> {
+    use lsp_types::{
+        ProgressParamsValue, WorkDoneProgress, WorkDoneProgressBegin, WorkDoneProgressEnd,
+        WorkDoneProgressReport,
+    };
+    use ProgressParamsValue::*;
+    use WorkDoneProgress::*;
+
+    let actions = |title: &str, message: Option<String>, perc: Option<u32>| {
+        let message = message.unwrap_or_default();
+        let message = if let Some(perc) = perc {
+            format!("{title}: {message} ({perc}/100)")
+        } else {
+            format!("{title}: {message}")
+        };
+
+        Some(Actions::Single(Action::SetStatusMessage { message }))
+    };
+
+    match params.value {
+        WorkDone(Begin(WorkDoneProgressBegin {
+            title,
+            message,
+            percentage,
+            ..
+        })) => {
+            let actions = actions(&title, message, percentage);
+            tokens.insert(params.token, title);
+
+            actions
+        }
+
+        WorkDone(Report(WorkDoneProgressReport {
+            message,
+            percentage,
+            ..
+        })) => {
+            let title: &str = tokens.get(&params.token).map_or("", |s| s);
+            actions(title, message, percentage)
+        }
+
+        WorkDone(End(WorkDoneProgressEnd { .. })) => {
+            tokens.remove(&params.token);
+
+            // Clear the status message when progress is done
+            Some(Actions::Single(Action::SetStatusMessage {
+                message: "".to_owned(),
+            }))
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Diagnostic {
+    path: String,
+    content: String,
+    coords: Coords,
+}
+
+impl Diagnostic {
+    fn new(uri: Uri, d: lsp_types::Diagnostic, encoding: PositionEncoding) -> Self {
+        let loc = lsp_types::Location {
+            uri: uri.clone(),
+            range: d.range,
+        };
+        let (path, coords) = Coords::new(loc, encoding);
+        let fname = path.split("/").last().unwrap();
+        let source = d.source.map(|s| format!("({s}) ")).unwrap_or_default();
+        let content = format!("{source}{fname}:{} {}", coords.line(), d.message);
+
+        Diagnostic {
+            path,
+            content,
+            coords,
+        }
+    }
+
+    pub fn as_actions(&self) -> Actions {
+        Actions::Multi(vec![
+            Action::OpenFile {
+                path: self.path.clone(),
+            },
+            Action::DotSetFromCoords {
+                coords: self.coords,
+            },
+            Action::SetViewPort(ViewPort::Center),
+        ])
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diagnostics(Vec<Diagnostic>);
+
+impl MbSelect for Diagnostics {
+    fn clone_selector(&self) -> MbSelector {
+        self.clone().into_selector()
+    }
+
+    fn prompt_and_options(&self) -> (String, Vec<String>) {
+        (
+            "Diagnostics> ".to_owned(),
+            self.0.iter().map(|d| d.content.clone()).collect(),
+        )
+    }
+
+    fn selected_actions(&self, sel: MiniBufferSelection) -> Option<Actions> {
+        match sel {
+            MiniBufferSelection::Line { cy, .. } => self.0.get(cy).map(|d| d.as_actions()),
+            _ => None,
+        }
+    }
 }

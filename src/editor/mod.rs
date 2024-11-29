@@ -37,7 +37,7 @@ mod mouse;
 
 pub(crate) use actions::{Action, Actions, ViewPort};
 pub(crate) use built_in_commands::built_in_commands;
-pub(crate) use minibuffer::{MiniBufferSelection, MiniBufferState};
+pub(crate) use minibuffer::{MbSelect, MbSelector, MiniBufferSelection, MiniBufferState};
 pub(crate) use mouse::Click;
 
 /// The mode that the [Editor] will run in following a call to [Editor::run].
@@ -412,6 +412,10 @@ where
                     self.layout.open_virtual(name, txt, true)
                 }
             }
+            LspShowDiagnostics => {
+                let action = self.lsp_manager.show_diagnostics();
+                self.handle_action(action, Source::Fsys);
+            }
             LspStart => {
                 if let Some(msg) = self.lsp_manager.start_client(self.layout.buffers()) {
                     self.set_status_message(msg);
@@ -423,6 +427,7 @@ where
                 .goto_definition(self.layout.active_buffer()),
             LspHover => self.lsp_manager.hover(self.layout.active_buffer()),
             MarkClean { bufid } => self.mark_clean(bufid),
+            MbSelect(selector) => selector.run(self),
             NewEditLogTransaction => self.layout.active_buffer_mut().new_edit_log_transaction(),
             NewColumn => self.layout.new_column(),
             NewWindow => self.layout.new_window(),

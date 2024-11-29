@@ -83,6 +83,7 @@ fn parse_command(input: &str, active_buffer_id: usize, cwd: &Path) -> Result<Act
         "Load" => Ok(Single(LoadDot { new_window: false })),
 
         "LspShowCapabilities" => Ok(Single(LspShowCapabilities)),
+        "LspShowDiagnostics" => Ok(Single(LspShowDiagnostics)),
         "LspStart" => Ok(Single(LspStart)),
         "LspStop" => Ok(Single(LspStop)),
         "LspGotoDef" => Ok(Single(LspGotoDefinition)),
