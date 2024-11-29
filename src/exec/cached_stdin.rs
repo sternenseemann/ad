@@ -138,7 +138,7 @@ pub struct CachedStdinIter<'a> {
     pub(super) to: usize,
 }
 
-impl<'a> Iterator for CachedStdinIter<'a> {
+impl Iterator for CachedStdinIter<'_> {
     type Item = (usize, char);
 
     fn next(&mut self) -> Option<Self::Item> {

@@ -835,7 +835,7 @@ impl<'a> Slice<'a> {
     }
 }
 
-impl<'a> fmt::Display for Slice<'a> {
+impl fmt::Display for Slice<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut v = Vec::with_capacity(self.left.len() + self.right.len());
         v.extend_from_slice(self.left);
@@ -848,7 +848,7 @@ impl<'a> fmt::Display for Slice<'a> {
     }
 }
 
-impl<'a, 'b> PartialEq<&'b str> for Slice<'a> {
+impl<'b> PartialEq<&'b str> for Slice<'_> {
     fn eq(&self, other: &&'b str) -> bool {
         let b = other.as_bytes();
 
@@ -856,7 +856,7 @@ impl<'a, 'b> PartialEq<&'b str> for Slice<'a> {
     }
 }
 
-impl<'a> PartialEq<String> for Slice<'a> {
+impl PartialEq<String> for Slice<'_> {
     fn eq(&self, other: &String) -> bool {
         *self == other.as_str()
     }
@@ -869,7 +869,7 @@ pub struct Chars<'a> {
     cur: usize,
 }
 
-impl<'a> Iterator for Chars<'a> {
+impl Iterator for Chars<'_> {
     type Item = char;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -895,7 +895,7 @@ pub struct IdxChars<'a> {
     rev: bool,
 }
 
-impl<'a> Iterator for IdxChars<'a> {
+impl Iterator for IdxChars<'_> {
     type Item = (usize, char);
 
     fn next(&mut self) -> Option<Self::Item> {
