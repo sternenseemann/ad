@@ -31,27 +31,6 @@ pub enum Message {
 }
 
 impl Message {
-    pub fn request<R>(id: RequestId, params: R::Params) -> Self
-    where
-        R: lsp_types::request::Request,
-    {
-        Self::Request(Request {
-            id,
-            method: Cow::Borrowed(R::METHOD),
-            params: serde_json::to_value(params).unwrap(),
-        })
-    }
-
-    pub fn notification<N>(params: N::Params) -> Self
-    where
-        N: lsp_types::notification::Notification,
-    {
-        Self::Notification(Notification {
-            method: Cow::Borrowed(N::METHOD),
-            params: serde_json::to_value(params).unwrap(),
-        })
-    }
-
     pub fn read(r: &mut impl BufRead) -> io::Result<Option<Self>> {
         match read_msg(r)? {
             Some(bytes) => match serde_json::from_slice(&bytes) {
@@ -121,21 +100,20 @@ fn read_msg(r: &mut dyn BufRead) -> io::Result<Option<Vec<u8>>> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Request {
-    pub id: RequestId,
+pub struct Notification {
     pub method: Cow<'static, str>,
     #[serde(default = "Value::default")]
     #[serde(skip_serializing_if = "Value::is_null")]
     pub params: Value,
 }
 
-impl Request {
-    pub fn extract<R>(self) -> Result<(RequestId, R::Params), serde_json::Error>
-    where
-        R: lsp_types::request::Request,
-    {
-        Ok((self.id, serde_json::from_value(self.params)?))
-    }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Request {
+    pub id: RequestId,
+    pub method: Cow<'static, str>,
+    #[serde(default = "Value::default")]
+    #[serde(skip_serializing_if = "Value::is_null")]
+    pub params: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -151,44 +129,6 @@ impl Response {
             Self::Result { id, .. } => id.clone(),
             Self::Error { id, .. } => id.clone(),
         }
-    }
-
-    pub fn extract<R>(self) -> Result<(RequestId, R::Result), (RequestId, ResponseError)>
-    where
-        R: lsp_types::request::Request,
-    {
-        match self {
-            Self::Result { id, result } => match serde_json::from_value(result) {
-                Ok(res) => Ok((id, res)),
-                Err(error) => Err((
-                    id,
-                    ResponseError {
-                        code: ErrorCode::Unknown,
-                        message: error.to_string(),
-                        data: None,
-                    },
-                )),
-            },
-
-            Self::Error { id, error } => Err((id, error)),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Notification {
-    pub method: Cow<'static, str>,
-    #[serde(default = "Value::default")]
-    #[serde(skip_serializing_if = "Value::is_null")]
-    pub params: Value,
-}
-
-impl Notification {
-    pub fn extract<N>(self) -> Result<N::Params, serde_json::Error>
-    where
-        N: lsp_types::notification::Notification,
-    {
-        serde_json::from_value(self.params)
     }
 }
 

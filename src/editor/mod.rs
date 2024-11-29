@@ -428,6 +428,9 @@ where
                 .lsp_manager
                 .goto_definition(self.layout.active_buffer()),
             LspHover => self.lsp_manager.hover(self.layout.active_buffer()),
+            LspReferences => self
+                .lsp_manager
+                .find_references(self.layout.active_buffer()),
             MarkClean { bufid } => self.mark_clean(bufid),
             MbSelect(selector) => selector.run(self),
             NewEditLogTransaction => self.layout.active_buffer_mut().new_edit_log_transaction(),

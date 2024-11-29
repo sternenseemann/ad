@@ -3,7 +3,8 @@
 //! This is not a general purpose client and it is not aiming to support all LSP features.
 use crate::lsp::{
     capabilities::PositionEncoding,
-    msg::{Message, RequestId},
+    messages::{LspNotification, LspRequest},
+    rpc::{Message, RequestId},
     Req,
 };
 use lsp_types::{TextDocumentIdentifier, TextDocumentPositionParams, Uri};
@@ -180,7 +181,7 @@ impl LspClient {
         };
 
         let id = self.next_id();
-        self.write(Message::request::<Initialize>(id.clone(), params))?;
+        self.write(Initialize::request(id.clone(), params))?;
 
         Ok(id)
     }
@@ -188,7 +189,7 @@ impl LspClient {
     pub fn ack_initialized(&mut self) -> io::Result<()> {
         use lsp_types::{notification::Initialized, InitializedParams};
 
-        self.write(Message::notification::<Initialized>(InitializedParams {}))
+        self.write(Initialized::notification(InitializedParams {}))
     }
 
     pub fn document_did_open(&mut self, path: String, text: String) -> io::Result<()> {
@@ -196,7 +197,7 @@ impl LspClient {
             notification::DidOpenTextDocument, DidOpenTextDocumentParams, TextDocumentItem,
         };
 
-        self.write(Message::notification::<DidOpenTextDocument>(
+        self.write(DidOpenTextDocument::notification(
             DidOpenTextDocumentParams {
                 text_document: TextDocumentItem {
                     uri: uri(&path),
@@ -211,7 +212,7 @@ impl LspClient {
     pub fn document_did_close(&mut self, path: String) -> io::Result<()> {
         use lsp_types::{notification::DidCloseTextDocument, DidCloseTextDocumentParams};
 
-        self.write(Message::notification::<DidCloseTextDocument>(
+        self.write(DidCloseTextDocument::notification(
             DidCloseTextDocumentParams {
                 text_document: txt_doc_id(&path),
             },
@@ -229,7 +230,7 @@ impl LspClient {
             TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier,
         };
 
-        self.write(Message::notification::<DidChangeTextDocument>(
+        self.write(DidChangeTextDocument::notification(
             DidChangeTextDocumentParams {
                 text_document: VersionedTextDocumentIdentifier {
                     uri: uri(&path),
@@ -259,7 +260,7 @@ impl LspClient {
         };
 
         let id = self.next_id();
-        self.write(Message::request::<GotoDefinition>(id.clone(), params))?;
+        self.write(GotoDefinition::request(id.clone(), params))?;
 
         Ok(id)
     }
@@ -273,7 +274,30 @@ impl LspClient {
         };
 
         let id = self.next_id();
-        self.write(Message::request::<HoverRequest>(id.clone(), params))?;
+        self.write(HoverRequest::request(id.clone(), params))?;
+
+        Ok(id)
+    }
+
+    pub fn find_references(
+        &mut self,
+        file: &str,
+        line: u32,
+        character: u32,
+    ) -> io::Result<RequestId> {
+        use lsp_types::{request::References, ReferenceContext, ReferenceParams};
+
+        let params = ReferenceParams {
+            text_document_position: txtdoc_pos(file, line, character),
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: ReferenceContext {
+                include_declaration: false,
+            },
+        };
+
+        let id = self.next_id();
+        self.write(References::request(id.clone(), params))?;
 
         Ok(id)
     }
@@ -282,8 +306,8 @@ impl LspClient {
         use lsp_types::{notification::Exit, request::Shutdown};
 
         let id = self.next_id();
-        self.write(Message::request::<Shutdown>(id, ()))?;
-        self.write(Message::notification::<Exit>(()))?;
+        self.write(Shutdown::request(id, ()))?;
+        self.write(Exit::notification(()))?;
         self.join();
 
         Ok(())

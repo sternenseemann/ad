@@ -68,6 +68,7 @@ pub(crate) fn normal_mode() -> Mode {
 
         [ leader, Char('e') ] => [ LspShowDiagnostics ],
         [ Char('g'), Char('d') ] => [ LspGotoDefinition ],
+        [ Char('g'), Char('r') ] => [ LspReferences ],
         [ Ctrl('k') ] => [ LspHover ],
 
         // Delimited pairs

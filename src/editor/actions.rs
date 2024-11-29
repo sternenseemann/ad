@@ -76,6 +76,7 @@ pub enum Action {
     LoadDot { new_window: bool },
     LspGotoDefinition,
     LspHover,
+    LspReferences,
     LspShowCapabilities,
     LspShowDiagnostics,
     LspStart,

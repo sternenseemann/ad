@@ -11,13 +11,12 @@ use crate::{
         capabilities::{Capabilities, PositionEncoding},
         client::{LspClient, LspMessage, Status},
         lang::{built_in_configs, LspConfig},
-        msg::{Message, Notification, Request, RequestId, Response},
+        messages::{LspRequest, LspServerNotification, LspServerRequest},
+        rpc::{Message, Notification, Request, RequestId, Response},
     },
     util::ReadOnlyLock,
 };
-use lsp_types::{
-    GotoDefinitionResponse, Hover, NumberOrString, ProgressParams, PublishDiagnosticsParams, Uri,
-};
+use lsp_types::{NumberOrString, Uri};
 use std::{
     collections::HashMap,
     sync::{
@@ -31,7 +30,8 @@ use tracing::{debug, error, warn};
 mod capabilities;
 mod client;
 mod lang;
-mod msg;
+mod messages;
+mod rpc;
 
 pub use capabilities::Coords;
 
@@ -226,6 +226,16 @@ impl LspManagerHandle {
             self.send(id, PendingParams::Hover(enc.buffer_pos(b)))
         }
     }
+
+    pub fn find_references(&self, b: &Buffer) {
+        if let Some((id, enc)) = self.lsp_id_and_encoding_for(b) {
+            if b.dirty {
+                self.document_changed(b);
+            }
+            debug!("sending LSP textDocument/references ({id})");
+            self.send(id, PendingParams::FindReferences(enc.buffer_pos(b)))
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -358,6 +368,19 @@ impl LspManager {
                     Err(e) => self.report_error(format!("unable to request LSP hover: {e}")),
                 }
             }
+
+            PendingParams::FindReferences(pos) => {
+                let client = client!();
+                match client.find_references(&pos.file, pos.line, pos.character) {
+                    Ok(req_id) => {
+                        self.pending
+                            .insert((client.id, req_id), Pending::FindReferences);
+                        self.send_status("requesting references");
+                    }
+
+                    Err(e) => self.report_error(format!("unable to request LSP references: {e}")),
+                }
+            }
         }
     }
 
@@ -368,7 +391,7 @@ impl LspManager {
         };
 
         if req.method == WorkDoneProgressCreate::METHOD {
-            match req.extract::<WorkDoneProgressCreate>() {
+            match WorkDoneProgressCreate::extract(req) {
                 Ok((_, WorkDoneProgressCreateParams { token })) => {
                     self.progress_tokens
                         .entry(lsp_id)
@@ -384,22 +407,9 @@ impl LspManager {
     }
 
     fn handle_response(&mut self, lsp_id: usize, res: Response) {
-        use lsp_types::request::{GotoDefinition, HoverRequest, Initialize};
+        use lsp_types::request::{GotoDefinition, HoverRequest, Initialize, References};
 
-        macro_rules! extract {
-            ($k:ty, $res:expr) => {
-                match $res.extract::<$k>() {
-                    Ok(data) => data,
-                    Err((_, e)) => {
-                        error!("dropping malformed LSP response: {e:?}");
-                        return;
-                    }
-                }
-            };
-        }
-
-        let req_id = res.id();
-        let p = match self.pending.remove(&(lsp_id, req_id)) {
+        let p = match self.pending.remove(&(lsp_id, res.id())) {
             Some(p) => p,
             None => {
                 error!("got response for unknown LSP request: {res:?}");
@@ -409,48 +419,11 @@ impl LspManager {
 
         let actions = match p {
             Pending::Initialize(lang, open_bufs) => {
-                let (_id, res) = extract!(Initialize, res);
-
-                let client = match self.clients.get_mut(&lsp_id) {
-                    Some(client) => client,
-                    None => {
-                        self.send_status(format!("no attached LSP client for {lang}"));
-                        return;
-                    }
-                };
-
-                match Capabilities::try_new(res) {
-                    Some(c) => {
-                        if let Err(e) = client.ack_initialized() {
-                            self.report_error(format!("error initializing LSP client: {e}"));
-                            return;
-                        }
-                        client.status = Status::Running;
-                        client.position_encoding = c.position_encoding;
-                        self.capabilities.write().unwrap().insert(lang, (lsp_id, c));
-                        for pending in open_bufs {
-                            self.handle_pending(PendingRequest { lsp_id, pending });
-                        }
-                    }
-
-                    // Unknown position encoding that we can't support
-                    None => self.stop_client(lsp_id),
-                };
-
-                return;
+                Initialize::handle(lsp_id, res, (lang, open_bufs), self)
             }
-
-            Pending::GotoDefinition => {
-                let (_id, data) = extract!(GotoDefinition, res);
-                self.clients
-                    .get(&lsp_id)
-                    .and_then(|client| handle_goto_definition(data, client.position_encoding))
-            }
-
-            Pending::Hover => {
-                let (_id, data) = extract!(HoverRequest, res);
-                handle_hover(data)
-            }
+            Pending::GotoDefinition => GotoDefinition::handle(lsp_id, res, (), self),
+            Pending::Hover => HoverRequest::handle(lsp_id, res, (), self),
+            Pending::FindReferences => References::handle(lsp_id, res, (), self),
         };
 
         if let Some(actions) = actions {
@@ -460,27 +433,16 @@ impl LspManager {
         }
     }
 
+    pub(super) fn progress_tokens(&mut self, lsp_id: usize) -> &mut HashMap<RequestId, String> {
+        self.progress_tokens.entry(lsp_id).or_default()
+    }
+
     pub fn handle_notification(&mut self, lsp_id: usize, n: Notification) {
         use lsp_types::notification::{Notification as _, Progress, PublishDiagnostics};
 
-        let tokens = self.progress_tokens.entry(lsp_id).or_default();
-
         let actions = match n.method.as_ref() {
-            Progress::METHOD => match n.extract::<Progress>() {
-                Ok(params) => handle_progress(params, tokens),
-                Err(e) => {
-                    error!("malformed progress notification: {e}");
-                    None
-                }
-            },
-
-            PublishDiagnostics::METHOD => {
-                match n.extract::<PublishDiagnostics>() {
-                    Ok(params) => self.update_diagnostics(lsp_id, params),
-                    Err(e) => error!("malformed diagnostics notification: {e}"),
-                }
-                None
-            }
+            Progress::METHOD => Progress::handle(lsp_id, n, self),
+            PublishDiagnostics::METHOD => PublishDiagnostics::handle(lsp_id, n, self),
 
             _ => {
                 warn!(
@@ -561,31 +523,6 @@ impl LspManager {
         };
         self.send_status(message);
     }
-
-    /// Currently throwing away a LOT of the information contained in the payload from the server
-    /// Servers are in control over the state of diagnostics so any push of diagnostic state for
-    /// a given file overwrites our current state
-    fn update_diagnostics(&mut self, lsp_id: usize, params: PublishDiagnosticsParams) {
-        let encoding = match self.clients.get(&lsp_id) {
-            Some(c) => c.position_encoding,
-            None => return,
-        };
-
-        let PublishDiagnosticsParams {
-            uri, diagnostics, ..
-        } = params;
-
-        let new_diagnostics: Vec<Diagnostic> = diagnostics
-            .into_iter()
-            .map(|d| Diagnostic::new(uri.clone(), d, encoding))
-            .collect();
-
-        tracing::info!("new diagnostics: {new_diagnostics:?}");
-
-        let mut guard = self.diagnostics.write().unwrap();
-
-        guard.insert(uri, new_diagnostics);
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -627,123 +564,15 @@ pub(crate) enum PendingParams {
     },
     GotoDefinition(Pos),
     Hover(Pos),
+    FindReferences(Pos),
 }
 
 #[derive(Debug)]
 pub(crate) enum Pending {
     Initialize(String, Vec<PendingParams>),
+    FindReferences,
     GotoDefinition,
     Hover,
-}
-
-fn handle_goto_definition(
-    data: Option<GotoDefinitionResponse>,
-    p: PositionEncoding,
-) -> Option<Actions> {
-    match data? {
-        GotoDefinitionResponse::Scalar(loc) => {
-            let (path, coords) = Coords::new(loc, p);
-
-            Some(Actions::Multi(vec![
-                Action::OpenFile { path },
-                Action::DotSetFromCoords { coords },
-                Action::SetViewPort(ViewPort::Center),
-            ]))
-        }
-
-        GotoDefinitionResponse::Array(mut locs) => {
-            let (path, coords) = Coords::new(locs.remove(0), p);
-
-            Some(Actions::Multi(vec![
-                Action::OpenFile { path },
-                Action::DotSetFromCoords { coords },
-                Action::SetViewPort(ViewPort::Center),
-            ]))
-        }
-
-        GotoDefinitionResponse::Link(links) => {
-            error!("unhandled goto definition links response: {links:?}");
-            None
-        }
-    }
-}
-
-fn handle_hover(data: Option<Hover>) -> Option<Actions> {
-    use lsp_types::{HoverContents, MarkedString};
-
-    let ms_to_string = |ms: MarkedString| match ms {
-        MarkedString::String(s) => s,
-        MarkedString::LanguageString(ls) => ls.value,
-    };
-
-    let txt = match data?.contents {
-        HoverContents::Scalar(ms) => ms_to_string(ms),
-        HoverContents::Markup(mc) => mc.value,
-        HoverContents::Array(mss) => {
-            let strs: Vec<_> = mss.into_iter().map(ms_to_string).collect();
-            strs.join("\n")
-        }
-    };
-
-    Some(Actions::Single(Action::OpenVirtualFile {
-        name: LSP_FILE.to_string(),
-        txt,
-    }))
-}
-
-fn handle_progress(
-    params: ProgressParams,
-    tokens: &mut HashMap<NumberOrString, String>,
-) -> Option<Actions> {
-    use lsp_types::{
-        ProgressParamsValue, WorkDoneProgress, WorkDoneProgressBegin, WorkDoneProgressEnd,
-        WorkDoneProgressReport,
-    };
-    use ProgressParamsValue::*;
-    use WorkDoneProgress::*;
-
-    let actions = |title: &str, message: Option<String>, perc: Option<u32>| {
-        let message = message.unwrap_or_default();
-        let message = if let Some(perc) = perc {
-            format!("{title}: {message} ({perc}/100)")
-        } else {
-            format!("{title}: {message}")
-        };
-
-        Some(Actions::Single(Action::SetStatusMessage { message }))
-    };
-
-    match params.value {
-        WorkDone(Begin(WorkDoneProgressBegin {
-            title,
-            message,
-            percentage,
-            ..
-        })) => {
-            let actions = actions(&title, message, percentage);
-            tokens.insert(params.token, title);
-
-            actions
-        }
-
-        WorkDone(Report(WorkDoneProgressReport {
-            message,
-            percentage,
-            ..
-        })) => {
-            let title: &str = tokens.get(&params.token).map_or("", |s| s);
-            actions(title, message, percentage)
-        }
-
-        WorkDone(End(WorkDoneProgressEnd { .. })) => {
-            tokens.remove(&params.token);
-
-            // Clear the status message when progress is done
-            Some(Actions::Single(Action::SetStatusMessage {
-                message: "".to_owned(),
-            }))
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
