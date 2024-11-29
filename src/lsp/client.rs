@@ -6,7 +6,7 @@ use crate::lsp::{
     msg::{Message, RequestId},
     Req,
 };
-use lsp_types::{TextDocumentIdentifier, TextDocumentPositionParams};
+use lsp_types::{TextDocumentIdentifier, TextDocumentPositionParams, Uri};
 use std::{
     ffi::OsStr,
     io::{self, BufRead, BufReader},
@@ -37,6 +37,7 @@ pub struct LspClient {
     pub(super) id: usize,
     pub(super) cmd: String,
     pub(super) position_encoding: PositionEncoding,
+    language: String,
     stdin: ChildStdin,
     read_thread: JoinHandle<io::Result<()>>,
     err_thread: JoinHandle<io::Result<()>>,
@@ -49,7 +50,13 @@ impl LspClient {
     /// Stdin for the server is held within the client and can be used via the [LspClient::write]
     /// method to communicate with the server. Messages coming from the server are sent over `tx`
     /// for centeral processing in the main editor event loop and errors are logged.
-    pub fn new<I, S>(lsp_id: usize, cmd: &str, args: I, tx: Sender<Req>) -> io::Result<Self>
+    pub fn new<I, S>(
+        lsp_id: usize,
+        language: &str,
+        cmd: &str,
+        args: I,
+        tx: Sender<Req>,
+    ) -> io::Result<Self>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
@@ -88,6 +95,7 @@ impl LspClient {
             id: lsp_id,
             cmd: cmd.to_string(),
             position_encoding: PositionEncoding::Utf32,
+            language: language.to_owned(),
             stdin,
             read_thread,
             err_thread,
@@ -183,6 +191,59 @@ impl LspClient {
         self.write(Message::notification::<Initialized>(InitializedParams {}))
     }
 
+    pub fn document_did_open(&mut self, path: String, text: String) -> io::Result<()> {
+        use lsp_types::{
+            notification::DidOpenTextDocument, DidOpenTextDocumentParams, TextDocumentItem,
+        };
+
+        self.write(Message::notification::<DidOpenTextDocument>(
+            DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: uri(&path),
+                    language_id: self.language.clone(),
+                    version: 1,
+                    text,
+                },
+            },
+        ))
+    }
+
+    pub fn document_did_close(&mut self, path: String) -> io::Result<()> {
+        use lsp_types::{notification::DidCloseTextDocument, DidCloseTextDocumentParams};
+
+        self.write(Message::notification::<DidCloseTextDocument>(
+            DidCloseTextDocumentParams {
+                text_document: txt_doc_id(&path),
+            },
+        ))
+    }
+
+    pub fn document_did_change(
+        &mut self,
+        path: String,
+        text: String,
+        version: usize,
+    ) -> io::Result<()> {
+        use lsp_types::{
+            notification::DidChangeTextDocument, DidChangeTextDocumentParams,
+            TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier,
+        };
+
+        self.write(Message::notification::<DidChangeTextDocument>(
+            DidChangeTextDocumentParams {
+                text_document: VersionedTextDocumentIdentifier {
+                    uri: uri(&path),
+                    version: version as i32,
+                },
+                content_changes: vec![TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text,
+                }],
+            },
+        ))
+    }
+
     pub fn goto_definition(
         &mut self,
         file: &str,
@@ -254,19 +315,20 @@ impl LspClient {
     }
 }
 
-fn txt_doc_id(file: &str) -> TextDocumentIdentifier {
-    use lsp_types::{TextDocumentIdentifier, Uri};
-
-    TextDocumentIdentifier {
-        uri: Uri::from_str(&format!("file://{file}")).unwrap(),
-    }
+#[inline]
+fn uri(path: &str) -> Uri {
+    Uri::from_str(&format!("file://{path}")).unwrap()
 }
 
-fn txtdoc_pos(file: &str, line: u32, character: u32) -> TextDocumentPositionParams {
-    use lsp_types::Position;
+#[inline]
+fn txt_doc_id(path: &str) -> TextDocumentIdentifier {
+    lsp_types::TextDocumentIdentifier { uri: uri(path) }
+}
 
+#[inline]
+fn txtdoc_pos(file: &str, line: u32, character: u32) -> TextDocumentPositionParams {
     TextDocumentPositionParams {
         text_document: txt_doc_id(file),
-        position: Position { line, character },
+        position: lsp_types::Position { line, character },
     }
 }

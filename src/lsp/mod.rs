@@ -3,7 +3,7 @@
 //! See the LSP spec for details of semantics:
 //!   https://microsoft.github.io/language-server-protocol/specification
 use crate::{
-    buffer::Buffer,
+    buffer::{Buffer, Buffers},
     die,
     editor::{Action, Actions, ViewPort},
     input::Event,
@@ -37,12 +37,13 @@ pub use capabilities::Coords;
 const LSP_FILE: &str = "+lsp";
 
 #[derive(Debug)]
-enum Req {
+pub(crate) enum Req {
     Start {
         lang: String,
         cmd: String,
         args: Vec<String>,
         root: String,
+        open_bufs: Vec<PendingParams>,
     },
     Stop {
         lsp_id: usize,
@@ -59,6 +60,15 @@ pub struct LspManagerHandle {
 }
 
 impl LspManagerHandle {
+    #[cfg(test)]
+    pub(crate) fn new_stubbed(tx_req: Sender<Req>) -> Self {
+        Self {
+            tx_req,
+            capabilities: Default::default(),
+            configs: Default::default(),
+        }
+    }
+
     #[inline]
     fn send(&self, lsp_id: usize, pending: PendingParams) {
         let req = Req::Pending(PendingRequest { lsp_id, pending });
@@ -87,20 +97,33 @@ impl LspManagerHandle {
             .find(|c| c.extensions.iter().any(|e| e == ext))
     }
 
-    fn start_req_for_buf(&self, b: &Buffer) -> Option<Req> {
+    fn start_req_for_buf(&self, bs: &Buffers) -> Option<Req> {
+        let b = bs.active();
         let config = self.config_for_buffer(b)?;
         let root = config.root_for_buffer(b)?.to_str()?.to_owned();
+        let lang = &config.lang;
+        let open_bufs: Vec<_> = bs
+            .iter()
+            .flat_map(|b| match self.config_for_buffer(b) {
+                Some(config) if &config.lang == lang => Some(PendingParams::DocumentOpen {
+                    path: b.full_name().to_string(),
+                    content: b.str_contents(),
+                }),
+                _ => None,
+            })
+            .collect();
 
         Some(Req::Start {
             lang: config.lang.clone(),
             cmd: config.cmd.clone(),
             args: config.args.clone(),
             root,
+            open_bufs,
         })
     }
 
-    pub fn start_client(&self, b: &Buffer) -> Option<&'static str> {
-        match self.start_req_for_buf(b) {
+    pub fn start_client(&self, bs: &Buffers) -> Option<&'static str> {
+        match self.start_req_for_buf(bs) {
             Some(req) => {
                 if let Err(e) = self.tx_req.send(req) {
                     die!("LSP manager died: {e}")
@@ -112,7 +135,7 @@ impl LspManagerHandle {
         }
     }
 
-    pub fn stop_client(&mut self, b: &Buffer) {
+    pub fn stop_client(&self, b: &Buffer) {
         if let Some((lsp_id, _)) = self.lsp_id_and_encoding_for(b) {
             if let Err(e) = self.tx_req.send(Req::Stop { lsp_id }) {
                 die!("LSP manager died: {e}")
@@ -133,14 +156,53 @@ impl LspManagerHandle {
         Some((LSP_FILE, txt))
     }
 
-    pub fn goto_definition(&mut self, b: &Buffer) {
+    pub fn document_opened(&self, b: &Buffer) {
+        if let Some((id, _)) = self.lsp_id_and_encoding_for(b) {
+            let path = b.full_name().to_string();
+            let content = b.str_contents();
+
+            self.send(id, PendingParams::DocumentOpen { path, content })
+        }
+    }
+
+    pub fn document_closed(&self, b: &Buffer) {
+        if let Some((id, _)) = self.lsp_id_and_encoding_for(b) {
+            let path = b.full_name().to_string();
+
+            self.send(id, PendingParams::DocumentClose { path })
+        }
+    }
+
+    pub fn document_changed(&self, b: &Buffer) {
+        if let Some((id, _)) = self.lsp_id_and_encoding_for(b) {
+            let path = b.full_name().to_string();
+            let content = b.str_contents();
+
+            self.send(
+                id,
+                PendingParams::DocumentChange {
+                    path,
+                    content,
+                    version: 2,
+                },
+            )
+        }
+    }
+
+    pub fn goto_definition(&self, b: &Buffer) {
         if let Some((id, enc)) = self.lsp_id_and_encoding_for(b) {
+            if b.dirty {
+                self.document_changed(b);
+            }
             self.send(id, PendingParams::GotoDefinition(enc.buffer_pos(b)))
         }
     }
 
-    pub fn hover(&mut self, b: &Buffer) {
+    pub fn hover(&self, b: &Buffer) {
         if let Some((id, enc)) = self.lsp_id_and_encoding_for(b) {
+            if b.dirty {
+                self.document_changed(b);
+            }
             self.send(id, PendingParams::Hover(enc.buffer_pos(b)))
         }
     }
@@ -191,7 +253,8 @@ impl LspManager {
                     cmd,
                     args,
                     root,
-                } => self.start_client(lang, cmd, args, root),
+                    open_bufs,
+                } => self.start_client(lang, cmd, args, root, open_bufs),
                 Req::Stop { lsp_id } => self.stop_client(lsp_id),
                 Req::Pending(p) => self.handle_pending(p),
 
@@ -225,6 +288,28 @@ impl LspManager {
         };
 
         match pending {
+            PendingParams::DocumentOpen { path, content } => {
+                if let Err(e) = client.document_did_open(path, content) {
+                    self.report_error(format!("unable to notify document open: {e}"))
+                }
+            }
+
+            PendingParams::DocumentClose { path } => {
+                if let Err(e) = client.document_did_close(path) {
+                    self.report_error(format!("unable to notify document close: {e}"))
+                }
+            }
+
+            PendingParams::DocumentChange {
+                path,
+                content,
+                version,
+            } => {
+                if let Err(e) = client.document_did_change(path, content, version) {
+                    self.report_error(format!("unable to notify document change: {e}"))
+                }
+            }
+
             PendingParams::GotoDefinition(pos) => {
                 match client.goto_definition(&pos.file, pos.line, pos.character) {
                     Ok(req_id) => {
@@ -297,7 +382,7 @@ impl LspManager {
         };
 
         let actions = match p {
-            Pending::Initialize(lang) => {
+            Pending::Initialize(lang, open_bufs) => {
                 let (_id, res) = extract!(Initialize, res);
 
                 let client = match self.clients.get_mut(&lsp_id) {
@@ -317,6 +402,9 @@ impl LspManager {
                         client.status = Status::Running;
                         client.position_encoding = c.position_encoding;
                         self.capabilities.write().unwrap().insert(lang, (lsp_id, c));
+                        for pending in open_bufs {
+                            self.handle_pending(PendingRequest { lsp_id, pending });
+                        }
                     }
 
                     // Unknown position encoding that we can't support
@@ -366,9 +454,16 @@ impl LspManager {
         self.send_status(message);
     }
 
-    pub fn start_client(&mut self, lang: String, cmd: String, args: Vec<String>, root: String) {
+    fn start_client(
+        &mut self,
+        lang: String,
+        cmd: String,
+        args: Vec<String>,
+        root: String,
+        open_bufs: Vec<PendingParams>,
+    ) {
         let lsp_id = self.next_id();
-        let mut client = match LspClient::new(lsp_id, &cmd, args, self.tx_req.clone()) {
+        let mut client = match LspClient::new(lsp_id, &lang, &cmd, args, self.tx_req.clone()) {
             Ok(client) => client,
             Err(e) => {
                 return self.report_error(format!("failed to start LSP server: {e}"));
@@ -383,11 +478,11 @@ impl LspManager {
 
         self.clients.insert(lsp_id, client);
         self.pending
-            .insert((lsp_id, req_id), Pending::Initialize(lang));
+            .insert((lsp_id, req_id), Pending::Initialize(lang, open_bufs));
         self.send_status("LSP server started")
     }
 
-    pub fn stop_client(&mut self, lsp_id: usize) {
+    fn stop_client(&mut self, lsp_id: usize) {
         let client = match self.clients.remove(&lsp_id) {
             Some(client) => client,
             None => return self.report_error("no attached LSP server"),
@@ -405,7 +500,7 @@ impl LspManager {
 }
 
 #[derive(Debug, Clone)]
-struct Pos {
+pub(crate) struct Pos {
     file: String,
     line: u32,
     character: u32,
@@ -422,20 +517,32 @@ impl Pos {
 }
 
 #[derive(Debug)]
-struct PendingRequest {
+pub(crate) struct PendingRequest {
     lsp_id: usize,
     pending: PendingParams,
 }
 
 #[derive(Debug)]
-enum PendingParams {
+pub(crate) enum PendingParams {
+    DocumentOpen {
+        path: String,
+        content: String,
+    },
+    DocumentClose {
+        path: String,
+    },
+    DocumentChange {
+        path: String,
+        content: String,
+        version: usize,
+    },
     GotoDefinition(Pos),
     Hover(Pos),
 }
 
 #[derive(Debug)]
-enum Pending {
-    Initialize(String),
+pub(crate) enum Pending {
+    Initialize(String, Vec<PendingParams>),
     GotoDefinition,
     Hover,
 }

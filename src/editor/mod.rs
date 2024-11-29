@@ -21,7 +21,10 @@ use ad_event::Source;
 use std::{
     env, panic,
     path::PathBuf,
-    sync::mpsc::{channel, Receiver, Sender},
+    sync::{
+        mpsc::{channel, Receiver, Sender},
+        Arc,
+    },
     time::Instant,
 };
 use tracing::{debug, trace, warn};
@@ -59,7 +62,7 @@ where
     modes: Vec<Mode>,
     pending_keys: Vec<Input>,
     layout: Layout,
-    lsp_manager: LspManagerHandle,
+    lsp_manager: Arc<LspManagerHandle>,
     tx_events: Sender<Event>,
     rx_events: Receiver<Event>,
     tx_fsys: Sender<LogEvent>,
@@ -103,7 +106,8 @@ where
         let (tx_fsys, rx_fsys) = channel();
 
         set_config(cfg);
-        let lsp_manager = LspManager::spawn(tx_events.clone());
+        let lsp_manager = Arc::new(LspManager::spawn(tx_events.clone()));
+        let layout = Layout::new(0, 0, lsp_manager.clone());
 
         Self {
             system,
@@ -112,7 +116,7 @@ where
             running: true,
             modes: modes(),
             pending_keys: Vec::new(),
-            layout: Layout::new(0, 0),
+            layout,
             lsp_manager,
             tx_events,
             rx_events,
@@ -409,7 +413,7 @@ where
                 }
             }
             LspStart => {
-                if let Some(msg) = self.lsp_manager.start_client(self.layout.active_buffer()) {
+                if let Some(msg) = self.lsp_manager.start_client(self.layout.buffers()) {
                     self.set_status_message(msg);
                 }
             }

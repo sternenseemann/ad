@@ -4,10 +4,11 @@ use crate::{
     config_handle,
     dot::{Cur, Dot},
     editor::ViewPort,
+    lsp::LspManagerHandle,
     ziplist,
     ziplist::{Position, ZipList},
 };
-use std::{cmp::min, io, mem::swap, path::Path};
+use std::{cmp::min, io, mem::swap, path::Path, sync::Arc};
 use tracing::debug;
 use unicode_width::UnicodeWidthChar;
 
@@ -28,8 +29,12 @@ pub(crate) struct Layout {
 }
 
 impl Layout {
-    pub(crate) fn new(screen_rows: usize, screen_cols: usize) -> Self {
-        let buffers = Buffers::new();
+    pub(crate) fn new(
+        screen_rows: usize,
+        screen_cols: usize,
+        lsp_handle: Arc<LspManagerHandle>,
+    ) -> Self {
+        let buffers = Buffers::new(lsp_handle);
         let id = buffers.active().id;
 
         Self {
@@ -39,6 +44,10 @@ impl Layout {
             cols: ziplist![Column::new(screen_rows, screen_cols, &[id])],
             views: vec![],
         }
+    }
+
+    pub(crate) fn buffers(&self) -> &Buffers {
+        &self.buffers
     }
 
     pub(crate) fn is_empty_scratch(&self) -> bool {
@@ -829,6 +838,7 @@ mod tests {
         key::Arrow,
     };
     use simple_test_case::test_case;
+    use std::sync::mpsc::channel;
 
     fn test_windows(col_wins: &[usize], n_rows: usize, n_cols: usize) -> Layout {
         let mut cols = Vec::with_capacity(col_wins.len());
@@ -842,8 +852,9 @@ mod tests {
             all_ids.extend(ids);
         }
 
+        let (tx, _) = channel();
         let mut ws = Layout {
-            buffers: Buffers::new_stubbed(&all_ids),
+            buffers: Buffers::new_stubbed(&all_ids, tx),
             screen_rows: n_rows,
             screen_cols: n_cols,
             cols: ZipList::try_from_iter(cols).unwrap(),

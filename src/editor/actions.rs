@@ -188,7 +188,9 @@ where
                     Ok(true) => {
                         let res = self.minibuffer_prompt("File changed on disk, reload? [y/n]: ");
                         if let Some("y" | "Y" | "yes") = res.as_deref() {
-                            let msg = self.layout.active_buffer_mut().reload_from_disk();
+                            let b = self.layout.active_buffer_mut();
+                            let msg = b.reload_from_disk();
+                            self.lsp_manager.document_changed(b);
                             self.set_status_message(&msg);
                         }
                     }
@@ -299,7 +301,9 @@ where
             None => return,
         };
 
-        let msg = self.layout.active_buffer_mut().save_to_disk_at(p, force);
+        let b = self.layout.active_buffer_mut();
+        let msg = b.save_to_disk_at(p, force);
+        self.lsp_manager.document_changed(b);
         self.set_status_message(&msg);
         let id = self.active_buffer_id();
         _ = self.tx_fsys.send(LogEvent::Save(id));

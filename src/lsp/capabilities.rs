@@ -94,10 +94,9 @@ impl PositionEncoding {
             Self::Utf16 => {
                 let slice = b.txt.line(pos.line as usize);
                 let mut character = pos.character as usize;
-                let mut buf = [0; 2];
                 let mut col = 0;
                 for (idx, ch) in slice.chars().enumerate() {
-                    let n = ch.encode_utf16(&mut buf).len();
+                    let n = ch.len_utf16();
                     col = idx;
                     character -= n;
                     if character == 0 {
@@ -132,10 +131,9 @@ impl PositionEncoding {
 
             Self::Utf16 => {
                 let slice = b.txt.line(line);
-                let mut buf = [0; 2];
                 let mut character = 0;
                 for ch in slice.chars().take(col) {
-                    character += ch.encode_utf16(&mut buf).len();
+                    character += ch.len_utf16();
                 }
 
                 (line as u32, character as u32)

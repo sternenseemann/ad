@@ -1,6 +1,7 @@
 use crate::{
     buffer::{Buffer, BufferKind, Cur},
     dot::TextObject,
+    lsp::LspManagerHandle,
     ziplist,
     ziplist::ZipList,
 };
@@ -10,7 +11,13 @@ use std::{
     io::{self, ErrorKind},
     mem,
     path::Path,
+    sync::Arc,
 };
+
+#[cfg(test)]
+use crate::lsp::Req;
+#[cfg(test)]
+use std::sync::mpsc::Sender;
 
 const MAX_JUMPS: usize = 100;
 
@@ -24,25 +31,21 @@ pub struct Buffers {
     next_id: BufferId,
     inner: ZipList<Buffer>,
     jump_list: JumpList,
-}
-
-impl Default for Buffers {
-    fn default() -> Self {
-        Self::new()
-    }
+    lsp_handle: Arc<LspManagerHandle>,
 }
 
 impl Buffers {
-    pub fn new() -> Self {
+    pub fn new(lsp_handle: Arc<LspManagerHandle>) -> Self {
         Self {
             next_id: 1,
             inner: ziplist![Buffer::new_unnamed(0, "")],
             jump_list: JumpList::default(),
+            lsp_handle,
         }
     }
 
     #[cfg(test)]
-    pub(crate) fn new_stubbed(ids: &[usize]) -> Self {
+    pub(crate) fn new_stubbed(ids: &[usize], tx_req: Sender<Req>) -> Self {
         Self {
             next_id: ids.last().unwrap() + 1,
             inner: ZipList::try_from_iter(
@@ -51,6 +54,7 @@ impl Buffers {
             )
             .unwrap(),
             jump_list: JumpList::default(),
+            lsp_handle: Arc::new(LspManagerHandle::new_stubbed(tx_req)),
         }
     }
 
@@ -80,6 +84,7 @@ impl Buffers {
             .map(|(_, b)| b.id);
 
         if let Some(existing_id) = existing_id {
+            self.notify_lsp_changes_if_dirty();
             self.record_jump_position();
             self.inner.focus_element_by(|b| b.id == existing_id);
             return Ok(None);
@@ -88,6 +93,7 @@ impl Buffers {
         let id = self.next_id;
         self.next_id += 1;
         let mut b = Buffer::new_from_canonical_file_path(id, path)?;
+        self.lsp_handle.document_opened(&b);
 
         // Remove an empty scratch buffer if the user has now opened a file
         if self.is_empty_scratch() {
@@ -100,12 +106,29 @@ impl Buffers {
         Ok(Some(id))
     }
 
+    /// This is a pretty hacky way to handle document sync but given that we are not wanting
+    /// the standard IDE behaviour of everything updating as you type, notifying changes when
+    /// we switch focus to another buffer (or within ../lsp/mod.rs before sending requests)
+    /// is sufficient for maintaining document sync.
+    #[inline]
+    fn notify_lsp_changes_if_dirty(&self) {
+        if self.inner.focus.dirty {
+            self.lsp_handle.document_changed(&self.inner.focus);
+        }
+    }
+
     pub fn next(&mut self) {
+        self.notify_lsp_changes_if_dirty();
         self.inner.focus_down();
     }
 
     pub fn previous(&mut self) {
+        self.notify_lsp_changes_if_dirty();
         self.inner.focus_up();
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Buffer> {
+        self.inner.iter().map(|(_, b)| b)
     }
 
     pub fn close_buffer(&mut self, id: BufferId) {
@@ -114,8 +137,9 @@ impl Buffers {
             .remove_where_with_default(|b| b.id == id, || Buffer::new_unnamed(self.next_id, ""));
         self.jump_list.clear_for_buffer(id);
 
-        if removed.is_some() {
-            self.next_id += 1;
+        if let Some(b) = removed {
+            self.lsp_handle.document_closed(&b);
+            self.next_id += 1; // for the newly added unnamed buffer
         }
     }
 
@@ -178,6 +202,7 @@ impl Buffers {
         if !self.contains_bufid(id) || self.active().id == id {
             return None;
         }
+        self.notify_lsp_changes_if_dirty();
         self.record_jump_position();
         self.inner.focus_element_by(|b| b.id == id);
 
@@ -186,6 +211,7 @@ impl Buffers {
 
     /// Focus the given buffer ID without touching the jump list
     pub(crate) fn focus_id_silent(&mut self, id: BufferId) {
+        self.notify_lsp_changes_if_dirty();
         self.inner.focus_element_by(|b| b.id == id);
     }
 
@@ -224,6 +250,7 @@ impl Buffers {
     }
 
     fn jump(&mut self, bufid: BufferId, cur: Cur) -> (BufferId, BufferId) {
+        self.notify_lsp_changes_if_dirty();
         let prev_id = self.inner.focus.id;
         self.inner.focus_element_by(|b| b.id == bufid);
         let new_id = self.inner.focus.id;
