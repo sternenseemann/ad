@@ -32,6 +32,7 @@ Running Built In Commands
 Running External Commands
 Running Edit Commands
 The Filesystem Interface
+LSP support
 
 ---
 
@@ -264,5 +265,16 @@ interactions that are possible through this interface:
 
   https://github.com/sminez/ad/tree/develop/data/bin
   https://github.com/sminez/ad/blob/develop/data/lib/ad.sh
+
+---
+
+>> LSP support
+
+ad has minimal support for the Language Server Protocol for the pieces of functionality that fit
+within the feature set of the editor itself. See the "Running Built In Commands" section for
+details of which features are supported.
+
+Configuration of LSP servers is currently not supported and only built in support for Rust and
+Dart is in place. Configuration via a TOML file is coming soon.
 
 ---
