@@ -11,7 +11,7 @@ use crate::{
         capabilities::{Capabilities, PositionEncoding},
         client::{LspClient, LspMessage, Status},
         lang::{built_in_configs, LspConfig},
-        messages::{LspRequest, LspServerNotification, LspServerRequest},
+        messages::{LspRequest, NotificationHandler, RequestHandler},
         rpc::{Message, Notification, Request, RequestId, Response},
     },
     util::ReadOnlyLock,
@@ -385,79 +385,58 @@ impl LspManager {
     }
 
     fn handle_request(&mut self, lsp_id: usize, req: Request) {
-        use lsp_types::{
-            request::{Request as _, WorkDoneProgressCreate},
-            WorkDoneProgressCreateParams,
-        };
+        use lsp_types::request as req;
 
-        if req.method == WorkDoneProgressCreate::METHOD {
-            match WorkDoneProgressCreate::extract(req) {
-                Ok((_, WorkDoneProgressCreateParams { token })) => {
-                    self.progress_tokens
-                        .entry(lsp_id)
-                        .or_default()
-                        .insert(token, Default::default());
-                }
-
-                Err(e) => {
-                    error!("malformed request from LSP: {e:?}");
-                }
-            }
+        RequestHandler {
+            lsp_id,
+            r: Some(req),
+            man: self,
         }
+        .handle::<req::WorkDoneProgressCreate>()
+        .log_unhandled();
     }
 
     fn handle_response(&mut self, lsp_id: usize, res: Response) {
-        use lsp_types::request::{GotoDefinition, HoverRequest, Initialize, References};
+        use lsp_types::request as req;
+        use Pending::*;
 
         let p = match self.pending.remove(&(lsp_id, res.id())) {
             Some(p) => p,
             None => {
-                error!("got response for unknown LSP request: {res:?}");
+                warn!("LSP - got response for unknown request: {res:?}");
                 return;
             }
         };
 
         let actions = match p {
-            Pending::Initialize(lang, open_bufs) => {
-                Initialize::handle(lsp_id, res, (lang, open_bufs), self)
-            }
-            Pending::GotoDefinition => GotoDefinition::handle(lsp_id, res, (), self),
-            Pending::Hover => HoverRequest::handle(lsp_id, res, (), self),
-            Pending::FindReferences => References::handle(lsp_id, res, (), self),
+            FindReferences => req::References::handle(lsp_id, res, (), self),
+            GotoDefinition => req::GotoDefinition::handle(lsp_id, res, (), self),
+            Hover => req::HoverRequest::handle(lsp_id, res, (), self),
+            Initialize(l, ob) => req::Initialize::handle(lsp_id, res, (l, ob), self),
         };
 
         if let Some(actions) = actions {
             if self.tx_events.send(Event::Actions(actions)).is_err() {
-                warn!("LSP sender actions channel closed: exiting");
+                error!("LSP - sender actions channel closed: exiting");
             }
         }
+    }
+
+    pub fn handle_notification(&mut self, lsp_id: usize, n: Notification) {
+        use lsp_types::notification as notif;
+
+        NotificationHandler {
+            lsp_id,
+            n: Some(n),
+            man: self,
+        }
+        .handle::<notif::Progress>()
+        .handle::<notif::PublishDiagnostics>()
+        .log_unhandled();
     }
 
     pub(super) fn progress_tokens(&mut self, lsp_id: usize) -> &mut HashMap<RequestId, String> {
         self.progress_tokens.entry(lsp_id).or_default()
-    }
-
-    pub fn handle_notification(&mut self, lsp_id: usize, n: Notification) {
-        use lsp_types::notification::{Notification as _, Progress, PublishDiagnostics};
-
-        let actions = match n.method.as_ref() {
-            Progress::METHOD => Progress::handle(lsp_id, n, self),
-            PublishDiagnostics::METHOD => PublishDiagnostics::handle(lsp_id, n, self),
-
-            _ => {
-                warn!(
-                    "unknown notification from LSP: {}",
-                    serde_json::to_string(&n).unwrap()
-                );
-                None
-            }
-        };
-
-        if let Some(actions) = actions {
-            if self.tx_events.send(Event::Actions(actions)).is_err() {
-                warn!("LSP sender actions channel closed: exiting");
-            }
-        }
     }
 
     fn next_id(&mut self) -> usize {
@@ -550,29 +529,29 @@ pub(crate) struct PendingRequest {
 
 #[derive(Debug)]
 pub(crate) enum PendingParams {
-    DocumentOpen {
-        path: String,
-        content: String,
-    },
-    DocumentClose {
-        path: String,
-    },
     DocumentChange {
         path: String,
         content: String,
         version: usize,
     },
+    DocumentClose {
+        path: String,
+    },
+    DocumentOpen {
+        path: String,
+        content: String,
+    },
+    FindReferences(Pos),
     GotoDefinition(Pos),
     Hover(Pos),
-    FindReferences(Pos),
 }
 
 #[derive(Debug)]
 pub(crate) enum Pending {
-    Initialize(String, Vec<PendingParams>),
     FindReferences,
     GotoDefinition,
     Hover,
+    Initialize(String, Vec<PendingParams>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

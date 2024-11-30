@@ -4,7 +4,7 @@
 use crate::lsp::{
     capabilities::PositionEncoding,
     messages::{LspNotification, LspRequest},
-    rpc::{Message, RequestId},
+    rpc::{Message, RequestId, Response},
     Req,
 };
 use lsp_types::{TextDocumentIdentifier, TextDocumentPositionParams, Uri};
@@ -113,6 +113,10 @@ impl LspClient {
 
     fn write(&mut self, msg: Message) -> io::Result<()> {
         msg.write(&mut self.stdin)
+    }
+
+    pub fn respond(&mut self, res: Response) -> io::Result<()> {
+        self.write(Message::Response(res))
     }
 
     pub fn initialize(&mut self, root: &str) -> io::Result<RequestId> {

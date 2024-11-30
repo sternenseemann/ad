@@ -1,5 +1,7 @@
+//! Traits and handlers for processing LSP messages
 use crate::{
     editor::{Action, Actions, MbSelect, MbSelector, MiniBufferSelection, ViewPort},
+    input::Event,
     lsp::{
         capabilities::{Capabilities, Coords},
         client::Status,
@@ -7,10 +9,12 @@ use crate::{
         Diagnostic, LspManager, PendingParams, PendingRequest, PositionEncoding, LSP_FILE,
     },
 };
-use lsp_types::{GotoDefinitionResponse, Location};
+use lsp_types::{GotoDefinitionResponse, Location, WorkDoneProgressCreateParams};
+use serde_json::Value;
 use std::borrow::Cow;
-use tracing::error;
+use tracing::{error, warn};
 
+/// Outgoing requests from us to the server that we will need to handle responses for
 pub(crate) trait LspRequest: lsp_types::request::Request {
     type Pending;
 
@@ -55,38 +59,9 @@ pub(crate) trait LspRequest: lsp_types::request::Request {
 
     #[allow(unused_variables)]
     fn handle_err(lsp_id: usize, err: ResponseError, man: &mut LspManager) -> Option<Actions> {
-        error!("dropping malformed LSP response: {err:?}");
+        error!("LSP - dropping malformed response: {err:?}");
         None
     }
-}
-
-pub(crate) trait LspServerRequest: lsp_types::request::Request {
-    fn extract(req: Request) -> Result<(RequestId, Self::Params), serde_json::Error> {
-        Ok((req.id, serde_json::from_value(req.params)?))
-    }
-}
-
-pub(crate) trait LspNotification: lsp_types::notification::Notification {
-    fn notification(params: Self::Params) -> Message {
-        Message::Notification(Notification {
-            method: Cow::Borrowed(Self::METHOD),
-            params: serde_json::to_value(params).unwrap(),
-        })
-    }
-}
-
-pub(crate) trait LspServerNotification: lsp_types::notification::Notification {
-    fn handle(lsp_id: usize, n: Notification, man: &mut LspManager) -> Option<Actions> {
-        match serde_json::from_value(n.params) {
-            Ok(params) => Self::handle_params(lsp_id, params, man),
-            Err(e) => {
-                error!("malformed notification: {e}");
-                None
-            }
-        }
-    }
-
-    fn handle_params(lsp_id: usize, params: Self::Params, man: &mut LspManager) -> Option<Actions>;
 }
 
 impl LspRequest for lsp_types::request::GotoDefinition {
@@ -291,13 +266,157 @@ impl LspRequest for lsp_types::request::Shutdown {
     }
 }
 
-impl LspServerRequest for lsp_types::request::WorkDoneProgressCreate {}
+/// Helper struct for routing server requests to their appropriate handler
+pub(super) struct RequestHandler<'a> {
+    pub(super) lsp_id: usize,
+    pub(super) r: Option<Request>,
+    pub(super) man: &'a mut LspManager,
+}
+
+impl RequestHandler<'_> {
+    pub(super) fn handle<R>(&mut self) -> &mut Self
+    where
+        R: LspServerRequest,
+    {
+        let r = match self.r.take() {
+            Some(r) if r.method == R::METHOD => r,
+            Some(r) => {
+                self.r = Some(r);
+                return self;
+            }
+            None => return self,
+        };
+
+        let (res, actions) = match serde_json::from_value(r.params) {
+            Ok(params) => R::handle_params(self.lsp_id, r.id, params, self.man),
+            Err(e) => {
+                warn!("LSP - malformed server request: {e}");
+                return self;
+            }
+        };
+
+        match self.man.clients.get_mut(&self.lsp_id) {
+            Some(client) => {
+                if let Err(e) = client.respond(res) {
+                    error!("LSP - failed to respond request: {e}");
+                }
+            }
+            None => {
+                error!("LSP - no client available for responding to request");
+                return self;
+            }
+        }
+
+        if let Some(actions) = actions {
+            if self.man.tx_events.send(Event::Actions(actions)).is_err() {
+                error!("LSP - sender actions channel closed: exiting");
+            }
+        }
+
+        self
+    }
+
+    pub(super) fn log_unhandled(&mut self) {
+        if let Some(r) = &self.r {
+            warn!("LSP - unhandled server request: {r:?}");
+        }
+    }
+}
+
+/// Incoming requests from the server handle and respone to
+pub(crate) trait LspServerRequest: lsp_types::request::Request {
+    fn handle_params(
+        lsp_id: usize,
+        req_id: RequestId,
+        params: Self::Params,
+        man: &mut LspManager,
+    ) -> (Response, Option<Actions>);
+}
+
+impl LspServerRequest for lsp_types::request::WorkDoneProgressCreate {
+    fn handle_params(
+        lsp_id: usize,
+        req_id: RequestId,
+        WorkDoneProgressCreateParams { token }: WorkDoneProgressCreateParams,
+        man: &mut LspManager,
+    ) -> (Response, Option<Actions>) {
+        man.progress_tokens(lsp_id).insert(token, String::new());
+
+        (
+            Response::Result {
+                id: req_id,
+                result: Value::Null,
+            },
+            None,
+        )
+    }
+}
+
+/// Notifications sent from us to the server
+pub(crate) trait LspNotification: lsp_types::notification::Notification {
+    fn notification(params: Self::Params) -> Message {
+        Message::Notification(Notification {
+            method: Cow::Borrowed(Self::METHOD),
+            params: serde_json::to_value(params).unwrap(),
+        })
+    }
+}
 
 impl LspNotification for lsp_types::notification::DidChangeTextDocument {}
 impl LspNotification for lsp_types::notification::DidCloseTextDocument {}
 impl LspNotification for lsp_types::notification::DidOpenTextDocument {}
 impl LspNotification for lsp_types::notification::Exit {}
 impl LspNotification for lsp_types::notification::Initialized {}
+
+/// Helper struct for routing server notifications to their appropriate handler
+pub(super) struct NotificationHandler<'a> {
+    pub(super) lsp_id: usize,
+    pub(super) n: Option<Notification>,
+    pub(super) man: &'a mut LspManager,
+}
+
+impl NotificationHandler<'_> {
+    pub(super) fn handle<N>(&mut self) -> &mut Self
+    where
+        N: LspServerNotification,
+    {
+        let n = match self.n.take() {
+            Some(n) if n.method == N::METHOD => n,
+            Some(n) => {
+                self.n = Some(n);
+                return self;
+            }
+            None => return self,
+        };
+
+        let actions = match serde_json::from_value(n.params) {
+            Ok(params) => N::handle_params(self.lsp_id, params, self.man),
+            Err(e) => {
+                warn!("LSP - malformed notification: {e}");
+                None
+            }
+        };
+
+        if let Some(actions) = actions {
+            if self.man.tx_events.send(Event::Actions(actions)).is_err() {
+                error!("LSP - sender actions channel closed: exiting");
+            }
+        }
+
+        self
+    }
+
+    pub(super) fn log_unhandled(&mut self) {
+        if let Some(n) = &self.n {
+            warn!("LSP - unhandled notification: {n:?}");
+        }
+    }
+}
+
+/// Notifications sent from the server to us that we need to handle
+pub(crate) trait LspServerNotification: lsp_types::notification::Notification {
+    fn handle_params(lsp_id: usize, params: Self::Params, man: &mut LspManager) -> Option<Actions>;
+}
 
 impl LspServerNotification for lsp_types::notification::Progress {
     fn handle_params(lsp_id: usize, params: Self::Params, man: &mut LspManager) -> Option<Actions> {
