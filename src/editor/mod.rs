@@ -425,9 +425,15 @@ where
                 }
             }
             LspStop => self.lsp_manager.stop_client(self.layout.active_buffer()),
+            LspGotoDeclaration => self
+                .lsp_manager
+                .goto_declaration(self.layout.active_buffer()),
             LspGotoDefinition => self
                 .lsp_manager
                 .goto_definition(self.layout.active_buffer()),
+            LspGotoTypeDefinition => self
+                .lsp_manager
+                .goto_type_definition(self.layout.active_buffer()),
             LspHover => self.lsp_manager.hover(self.layout.active_buffer()),
             LspReferences => self
                 .lsp_manager

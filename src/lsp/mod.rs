@@ -207,6 +207,16 @@ impl LspManagerHandle {
         }
     }
 
+    pub fn goto_declaration(&self, b: &Buffer) {
+        if let Some((id, enc)) = self.lsp_id_and_encoding_for(b) {
+            if b.dirty {
+                self.document_changed(b);
+            }
+            debug!("sending LSP textDocument/declaration ({id})");
+            self.send(id, PendingParams::GotoDeclaration(enc.buffer_pos(b)))
+        }
+    }
+
     pub fn goto_definition(&self, b: &Buffer) {
         if let Some((id, enc)) = self.lsp_id_and_encoding_for(b) {
             if b.dirty {
@@ -214,6 +224,16 @@ impl LspManagerHandle {
             }
             debug!("sending LSP textDocument/definition ({id})");
             self.send(id, PendingParams::GotoDefinition(enc.buffer_pos(b)))
+        }
+    }
+
+    pub fn goto_type_definition(&self, b: &Buffer) {
+        if let Some((id, enc)) = self.lsp_id_and_encoding_for(b) {
+            if b.dirty {
+                self.document_changed(b);
+            }
+            debug!("sending LSP textDocument/typeDefinition ({id})");
+            self.send(id, PendingParams::GotoTypeDefinition(enc.buffer_pos(b)))
         }
     }
 
@@ -342,6 +362,21 @@ impl LspManager {
                 }
             }
 
+            PendingParams::GotoDeclaration(pos) => {
+                let client = client!();
+                match client.goto_declaration(&pos.file, pos.line, pos.character) {
+                    Ok(req_id) => {
+                        self.pending
+                            .insert((client.id, req_id), Pending::GotoDeclaration);
+                        self.send_status("requesting goto definition");
+                    }
+
+                    Err(e) => {
+                        self.report_error(format!("unable to request LSP goto declaration: {e}"))
+                    }
+                }
+            }
+
             PendingParams::GotoDefinition(pos) => {
                 let client = client!();
                 match client.goto_definition(&pos.file, pos.line, pos.character) {
@@ -354,6 +389,20 @@ impl LspManager {
                     Err(e) => {
                         self.report_error(format!("unable to request LSP goto definition: {e}"))
                     }
+                }
+            }
+
+            PendingParams::GotoTypeDefinition(pos) => {
+                let client = client!();
+                match client.goto_type_definition(&pos.file, pos.line, pos.character) {
+                    Ok(req_id) => {
+                        self.pending
+                            .insert((client.id, req_id), Pending::GotoTypeDefinition);
+                        self.send_status("requesting goto definition");
+                    }
+
+                    Err(e) => self
+                        .report_error(format!("unable to request LSP goto type definition: {e}")),
                 }
             }
 
@@ -410,7 +459,9 @@ impl LspManager {
 
         let actions = match p {
             FindReferences => req::References::handle(lsp_id, res, (), self),
+            GotoDeclaration => req::GotoDeclaration::handle(lsp_id, res, (), self),
             GotoDefinition => req::GotoDefinition::handle(lsp_id, res, (), self),
+            GotoTypeDefinition => req::GotoTypeDefinition::handle(lsp_id, res, (), self),
             Hover => req::HoverRequest::handle(lsp_id, res, (), self),
             Initialize(l, ob) => req::Initialize::handle(lsp_id, res, (l, ob), self),
         };
@@ -542,14 +593,18 @@ pub(crate) enum PendingParams {
         content: String,
     },
     FindReferences(Pos),
+    GotoDeclaration(Pos),
     GotoDefinition(Pos),
+    GotoTypeDefinition(Pos),
     Hover(Pos),
 }
 
 #[derive(Debug)]
 pub(crate) enum Pending {
     FindReferences,
+    GotoDeclaration,
     GotoDefinition,
+    GotoTypeDefinition,
     Hover,
     Initialize(String, Vec<PendingParams>),
 }

@@ -249,6 +249,26 @@ impl LspClient {
         ))
     }
 
+    pub fn goto_declaration(
+        &mut self,
+        file: &str,
+        line: u32,
+        character: u32,
+    ) -> io::Result<RequestId> {
+        use lsp_types::{request::GotoDeclaration, GotoDefinitionParams};
+
+        let params = GotoDefinitionParams {
+            text_document_position_params: txtdoc_pos(file, line, character),
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        let id = self.next_id();
+        self.write(GotoDeclaration::request(id.clone(), params))?;
+
+        Ok(id)
+    }
+
     pub fn goto_definition(
         &mut self,
         file: &str,
@@ -265,6 +285,26 @@ impl LspClient {
 
         let id = self.next_id();
         self.write(GotoDefinition::request(id.clone(), params))?;
+
+        Ok(id)
+    }
+
+    pub fn goto_type_definition(
+        &mut self,
+        file: &str,
+        line: u32,
+        character: u32,
+    ) -> io::Result<RequestId> {
+        use lsp_types::{request::GotoTypeDefinition, GotoDefinitionParams};
+
+        let params = GotoDefinitionParams {
+            text_document_position_params: txtdoc_pos(file, line, character),
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        };
+
+        let id = self.next_id();
+        self.write(GotoTypeDefinition::request(id.clone(), params))?;
 
         Ok(id)
     }

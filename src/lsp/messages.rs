@@ -65,6 +65,29 @@ pub(crate) trait LspRequest: lsp_types::request::Request {
     }
 }
 
+fn handle_goto_response(
+    lsp_id: usize,
+    params: Option<GotoDefinitionResponse>,
+    man: &mut LspManager,
+) -> Option<Actions> {
+    let enc = man.clients.get(&lsp_id)?.position_encoding;
+
+    let (path, coords) = match params? {
+        GotoDefinitionResponse::Scalar(loc) => Coords::new(loc, enc),
+        GotoDefinitionResponse::Array(mut locs) => Coords::new(locs.remove(0), enc),
+        GotoDefinitionResponse::Link(links) => {
+            error!("unhandled goto definition links response: {links:?}");
+            return None;
+        }
+    };
+
+    Some(Actions::Multi(vec![
+        Action::OpenFile { path },
+        Action::DotSetFromCoords { coords },
+        Action::SetViewPort(ViewPort::Center),
+    ]))
+}
+
 impl LspRequest for lsp_types::request::GotoDefinition {
     type Pending = ();
 
@@ -74,22 +97,33 @@ impl LspRequest for lsp_types::request::GotoDefinition {
         _: Self::Pending,
         man: &mut LspManager,
     ) -> Option<Actions> {
-        let enc = man.clients.get(&lsp_id)?.position_encoding;
+        handle_goto_response(lsp_id, params, man)
+    }
+}
 
-        let (path, coords) = match params? {
-            GotoDefinitionResponse::Scalar(loc) => Coords::new(loc, enc),
-            GotoDefinitionResponse::Array(mut locs) => Coords::new(locs.remove(0), enc),
-            GotoDefinitionResponse::Link(links) => {
-                error!("unhandled goto definition links response: {links:?}");
-                return None;
-            }
-        };
+impl LspRequest for lsp_types::request::GotoDeclaration {
+    type Pending = ();
 
-        Some(Actions::Multi(vec![
-            Action::OpenFile { path },
-            Action::DotSetFromCoords { coords },
-            Action::SetViewPort(ViewPort::Center),
-        ]))
+    fn handle_res(
+        lsp_id: usize,
+        params: Option<GotoDefinitionResponse>,
+        _: Self::Pending,
+        man: &mut LspManager,
+    ) -> Option<Actions> {
+        handle_goto_response(lsp_id, params, man)
+    }
+}
+
+impl LspRequest for lsp_types::request::GotoTypeDefinition {
+    type Pending = ();
+
+    fn handle_res(
+        lsp_id: usize,
+        params: Option<GotoDefinitionResponse>,
+        _: Self::Pending,
+        man: &mut LspManager,
+    ) -> Option<Actions> {
+        handle_goto_response(lsp_id, params, man)
     }
 }
 
