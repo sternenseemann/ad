@@ -7,25 +7,56 @@ use crate::{
         capabilities::{Capabilities, Coords},
         client::Status,
         rpc::{ErrorCode, Message, Notification, Request, RequestId, Response, ResponseError},
-        Diagnostic, LspManager, PendingParams, PendingRequest, PositionEncoding, LSP_FILE,
+        Diagnostic, LspManager, Pending, PendingParams, PendingRequest, Pos, PositionEncoding,
+        LSP_FILE,
     },
 };
-use lsp_types::{GotoDefinitionResponse, Location, WorkDoneProgressCreateParams};
+use lsp_types::{
+    GotoDefinitionParams, GotoDefinitionResponse, Location, TextDocumentIdentifier,
+    TextDocumentPositionParams, Uri, WorkDoneProgressCreateParams,
+};
 use serde_json::Value;
-use std::borrow::Cow;
+use std::{borrow::Cow, process, str::FromStr};
 use tracing::{error, warn};
 
 /// Outgoing requests from us to the server that we will need to handle responses for
 pub(crate) trait LspRequest: lsp_types::request::Request {
     type Pending;
+    type Data;
 
-    fn request(id: RequestId, params: Self::Params) -> Message {
-        Message::Request(Request {
-            id,
+    fn send(lsp_id: usize, data: Self::Data, p: Self::Pending, man: &mut LspManager) {
+        let client = match man.clients.get_mut(&lsp_id) {
+            Some(client) => match client.status {
+                Status::Running => client,
+                Status::Initializing => {
+                    man.send_status("LSP server still initializing");
+                    return;
+                }
+            },
+            None => {
+                man.send_status("no attached LSP client for buffer");
+                return;
+            }
+        };
+
+        let params = Self::prepare(data);
+        let id = client.next_id();
+        let res = client.write(Message::Request(Request {
+            id: id.clone(),
             method: Cow::Borrowed(Self::METHOD),
             params: serde_json::to_value(params).unwrap(),
-        })
+        }));
+
+        if let Err(e) = res {
+            man.report_error(format!("unable to send {} LSP request: {e}", Self::METHOD));
+            return;
+        }
+
+        man.pending.insert((client.id, id), Self::pending(p));
     }
+
+    fn prepare(data: Self::Data) -> Self::Params;
+    fn pending(p: Self::Pending) -> Pending;
 
     fn handle(
         lsp_id: usize,
@@ -74,7 +105,12 @@ fn handle_goto_response(
 
     let (path, coords) = match params? {
         GotoDefinitionResponse::Scalar(loc) => Coords::new(loc, enc),
-        GotoDefinitionResponse::Array(mut locs) => Coords::new(locs.remove(0), enc),
+        GotoDefinitionResponse::Array(mut locs) => {
+            if locs.is_empty() {
+                return None;
+            }
+            Coords::new(locs.remove(0), enc)
+        }
         GotoDefinitionResponse::Link(links) => {
             error!("unhandled goto definition links response: {links:?}");
             return None;
@@ -88,8 +124,31 @@ fn handle_goto_response(
     ]))
 }
 
-impl LspRequest for lsp_types::request::GotoDefinition {
+fn pos_to_params(
+    Pos {
+        file,
+        line,
+        character,
+    }: Pos,
+) -> GotoDefinitionParams {
+    GotoDefinitionParams {
+        text_document_position_params: txtdoc_pos(&file, line, character),
+        work_done_progress_params: Default::default(),
+        partial_result_params: Default::default(),
+    }
+}
+
+impl LspRequest for lsp_types::request::GotoDeclaration {
     type Pending = ();
+    type Data = Pos;
+
+    fn prepare(data: Self::Data) -> Self::Params {
+        pos_to_params(data)
+    }
+
+    fn pending(_: Self::Pending) -> Pending {
+        Pending::GotoDeclaration
+    }
 
     fn handle_res(
         lsp_id: usize,
@@ -101,8 +160,17 @@ impl LspRequest for lsp_types::request::GotoDefinition {
     }
 }
 
-impl LspRequest for lsp_types::request::GotoDeclaration {
+impl LspRequest for lsp_types::request::GotoDefinition {
     type Pending = ();
+    type Data = Pos;
+
+    fn prepare(data: Self::Data) -> Self::Params {
+        pos_to_params(data)
+    }
+
+    fn pending(_: Self::Pending) -> Pending {
+        Pending::GotoDefinition
+    }
 
     fn handle_res(
         lsp_id: usize,
@@ -116,6 +184,15 @@ impl LspRequest for lsp_types::request::GotoDeclaration {
 
 impl LspRequest for lsp_types::request::GotoTypeDefinition {
     type Pending = ();
+    type Data = Pos;
+
+    fn prepare(data: Self::Data) -> Self::Params {
+        pos_to_params(data)
+    }
+
+    fn pending(_: Self::Pending) -> Pending {
+        Pending::GotoTypeDefinition
+    }
 
     fn handle_res(
         lsp_id: usize,
@@ -129,6 +206,24 @@ impl LspRequest for lsp_types::request::GotoTypeDefinition {
 
 impl LspRequest for lsp_types::request::HoverRequest {
     type Pending = ();
+    type Data = Pos;
+
+    fn prepare(
+        Pos {
+            file,
+            line,
+            character,
+        }: Self::Data,
+    ) -> Self::Params {
+        lsp_types::HoverParams {
+            text_document_position_params: txtdoc_pos(&file, line, character),
+            work_done_progress_params: Default::default(),
+        }
+    }
+
+    fn pending(_: Self::Pending) -> Pending {
+        Pending::Hover
+    }
 
     fn handle_res(
         _: usize,
@@ -161,6 +256,105 @@ impl LspRequest for lsp_types::request::HoverRequest {
 
 impl LspRequest for lsp_types::request::Initialize {
     type Pending = (String, Vec<PendingParams>);
+    type Data = String;
+
+    // Need a custom send impl for initialize as the default one checks that the client is running
+    fn send(lsp_id: usize, data: Self::Data, p: Self::Pending, man: &mut LspManager) {
+        use lsp_types::request::Request as _;
+
+        let client = match man.clients.get_mut(&lsp_id) {
+            Some(client) => client,
+            None => {
+                man.send_status("no attached LSP client for buffer");
+                return;
+            }
+        };
+
+        let params = Self::prepare(data);
+        let id = client.next_id();
+        let res = client.write(Message::Request(Request {
+            id: id.clone(),
+            method: Cow::Borrowed(Self::METHOD),
+            params: serde_json::to_value(params).unwrap(),
+        }));
+
+        if let Err(e) = res {
+            man.report_error(format!("unable to send {} LSP request: {e}", Self::METHOD));
+            return;
+        }
+
+        man.pending.insert((client.id, id), Self::pending(p));
+    }
+
+    fn prepare(root: Self::Data) -> Self::Params {
+        use lsp_types::{
+            ClientCapabilities, DiagnosticClientCapabilities,
+            DiagnosticWorkspaceClientCapabilities, GeneralClientCapabilities,
+            HoverClientCapabilities, InitializeParams, MarkupKind, NumberOrString,
+            PositionEncodingKind, TextDocumentClientCapabilities, Uri, WindowClientCapabilities,
+            WorkDoneProgressParams, WorkspaceClientCapabilities, WorkspaceFolder,
+        };
+
+        let basename = root.split("/").last().unwrap_or_default();
+
+        #[allow(deprecated)] // root_uri, root_path
+        InitializeParams {
+            process_id: Some(process::id()),
+            work_done_progress_params: WorkDoneProgressParams {
+                work_done_token: Some(NumberOrString::String("abc123".to_string())),
+            },
+            root_path: Some(root.to_string()),
+            root_uri: Some(Uri::from_str(&format!("file://{root}")).unwrap()),
+            workspace_folders: Some(vec![WorkspaceFolder {
+                uri: Uri::from_str(&format!("file://{root}")).unwrap(),
+                name: basename.to_string(),
+            }]),
+            capabilities: ClientCapabilities {
+                workspace: Some(WorkspaceClientCapabilities {
+                    // https://docs.rs/lsp-types/0.97.0/lsp_types/struct.WorkspaceClientCapabilities.html
+                    workspace_folders: Some(true),
+                    diagnostic: Some(DiagnosticWorkspaceClientCapabilities {
+                        refresh_support: Some(true),
+                    }),
+                    ..Default::default()
+                }),
+                text_document: Some(TextDocumentClientCapabilities {
+                    diagnostic: Some(DiagnosticClientCapabilities {
+                        dynamic_registration: Some(true),
+                        related_document_support: Some(true),
+                    }),
+                    hover: Some(HoverClientCapabilities {
+                        dynamic_registration: Some(true),
+                        content_format: Some(vec![MarkupKind::PlainText]),
+                    }),
+                    // https://docs.rs/lsp-types/0.97.0/lsp_types/struct.TextDocumentClientCapabilities.html
+                    ..Default::default()
+                }),
+                // This is what we need for getting rust-analyzer (and presumably other LSPs?) to
+                // report things like their current state and progress during init
+                // -> results in us getting "window/workDoneProgress/create" requests
+                window: Some(WindowClientCapabilities {
+                    work_done_progress: Some(true),
+                    ..Default::default()
+                }),
+                general: Some(GeneralClientCapabilities {
+                    // Explicitly not supporting utf-16 for now and seeing how well that works...!
+                    position_encodings: Some(vec![
+                        PositionEncodingKind::UTF32,
+                        PositionEncodingKind::UTF8,
+                        PositionEncodingKind::UTF16,
+                    ]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn pending((lang, open_bufs): Self::Pending) -> Pending {
+        Pending::Initialize(lang, open_bufs)
+    }
 
     fn handle_res(
         lsp_id: usize,
@@ -168,23 +362,24 @@ impl LspRequest for lsp_types::request::Initialize {
         (lang, open_bufs): Self::Pending,
         man: &mut LspManager,
     ) -> Option<Actions> {
-        let client = match man.clients.get_mut(&lsp_id) {
-            Some(client) => client,
-            None => {
-                man.send_status(format!("no attached LSP client for {lang}"));
-                return None;
-            }
-        };
+        use lsp_types::notification::Initialized;
 
         match Capabilities::try_new(res) {
             Some(c) => {
-                if let Err(e) = client.ack_initialized() {
-                    man.report_error(format!("error initializing LSP client: {e}"));
-                    return None;
-                }
+                let client = match man.clients.get_mut(&lsp_id) {
+                    Some(client) => client,
+                    None => {
+                        man.send_status(format!("no attached LSP client for {lang}"));
+                        return None;
+                    }
+                };
+
                 client.status = Status::Running;
                 client.position_encoding = c.position_encoding;
                 man.capabilities.write().unwrap().insert(lang, (lsp_id, c));
+
+                Initialized::send(lsp_id, (), man);
+
                 for pending in open_bufs {
                     man.handle_pending(PendingRequest { lsp_id, pending });
                 }
@@ -200,6 +395,30 @@ impl LspRequest for lsp_types::request::Initialize {
 
 impl LspRequest for lsp_types::request::References {
     type Pending = ();
+    type Data = Pos;
+
+    fn prepare(
+        Pos {
+            file,
+            line,
+            character,
+        }: Self::Data,
+    ) -> Self::Params {
+        use lsp_types::{ReferenceContext, ReferenceParams};
+
+        ReferenceParams {
+            text_document_position: txtdoc_pos(&file, line, character),
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: ReferenceContext {
+                include_declaration: false,
+            },
+        }
+    }
+
+    fn pending(_: Self::Pending) -> Pending {
+        Pending::FindReferences
+    }
 
     fn handle_res(
         lsp_id: usize,
@@ -304,6 +523,12 @@ impl MbSelect for References {
 
 impl LspRequest for lsp_types::request::Shutdown {
     type Pending = ();
+    type Data = ();
+
+    fn prepare(_: Self::Data) -> Self::Params {}
+    fn pending(_: Self::Pending) -> Pending {
+        Pending::GotoDefinition // dummy
+    }
 
     fn handle_res(
         _: usize,
@@ -346,7 +571,7 @@ impl RequestHandler<'_> {
 
         match self.man.clients.get_mut(&self.lsp_id) {
             Some(client) => {
-                if let Err(e) = client.respond(res) {
+                if let Err(e) = client.write(Message::Response(res)) {
                     error!("LSP - failed to respond request: {e}");
                 }
             }
@@ -403,19 +628,103 @@ impl LspServerRequest for lsp_types::request::WorkDoneProgressCreate {
 
 /// Notifications sent from us to the server
 pub(crate) trait LspNotification: lsp_types::notification::Notification {
-    fn notification(params: Self::Params) -> Message {
-        Message::Notification(Notification {
+    type Data;
+
+    fn send(lsp_id: usize, data: Self::Data, man: &mut LspManager) {
+        let client = match man.clients.get_mut(&lsp_id) {
+            Some(client) => match client.status {
+                Status::Running => client,
+                Status::Initializing => {
+                    man.send_status("LSP server still initializing");
+                    return;
+                }
+            },
+            None => {
+                man.send_status("no attached LSP client for buffer");
+                return;
+            }
+        };
+
+        let params = Self::prepare(data);
+        let res = client.write(Message::Notification(Notification {
             method: Cow::Borrowed(Self::METHOD),
             params: serde_json::to_value(params).unwrap(),
-        })
+        }));
+
+        if let Err(e) = res {
+            man.report_error(format!(
+                "unable to send {} LSP notification: {e}",
+                Self::METHOD
+            ));
+        }
+    }
+
+    fn prepare(data: Self::Data) -> Self::Params;
+}
+
+impl LspNotification for lsp_types::notification::DidChangeTextDocument {
+    type Data = (String, String, i32);
+
+    fn prepare((path, text, version): Self::Data) -> Self::Params {
+        use lsp_types::{
+            DidChangeTextDocumentParams, TextDocumentContentChangeEvent,
+            VersionedTextDocumentIdentifier,
+        };
+
+        DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri: uri(&path),
+                version,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text,
+            }],
+        }
     }
 }
 
-impl LspNotification for lsp_types::notification::DidChangeTextDocument {}
-impl LspNotification for lsp_types::notification::DidCloseTextDocument {}
-impl LspNotification for lsp_types::notification::DidOpenTextDocument {}
-impl LspNotification for lsp_types::notification::Exit {}
-impl LspNotification for lsp_types::notification::Initialized {}
+impl LspNotification for lsp_types::notification::DidCloseTextDocument {
+    type Data = String;
+
+    fn prepare(path: Self::Data) -> Self::Params {
+        lsp_types::DidCloseTextDocumentParams {
+            text_document: txt_doc_id(&path),
+        }
+    }
+}
+
+impl LspNotification for lsp_types::notification::DidOpenTextDocument {
+    type Data = (String, String, String);
+
+    fn prepare((language_id, path, text): Self::Data) -> Self::Params {
+        use lsp_types::{DidOpenTextDocumentParams, TextDocumentItem};
+
+        DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: uri(&path),
+                language_id,
+                version: 1,
+                text,
+            },
+        }
+    }
+}
+
+impl LspNotification for lsp_types::notification::Exit {
+    type Data = ();
+
+    fn prepare(_: Self::Data) -> Self::Params {}
+}
+
+impl LspNotification for lsp_types::notification::Initialized {
+    type Data = ();
+
+    fn prepare(_: Self::Data) -> Self::Params {
+        lsp_types::InitializedParams {}
+    }
+}
 
 /// Helper struct for routing server notifications to their appropriate handler
 pub(super) struct NotificationHandler<'a> {
@@ -549,5 +858,23 @@ impl LspServerNotification for lsp_types::notification::PublishDiagnostics {
         guard.insert(uri, new_diagnostics);
 
         None
+    }
+}
+
+#[inline]
+fn uri(path: &str) -> Uri {
+    Uri::from_str(&format!("file://{path}")).unwrap()
+}
+
+#[inline]
+fn txt_doc_id(path: &str) -> TextDocumentIdentifier {
+    lsp_types::TextDocumentIdentifier { uri: uri(path) }
+}
+
+#[inline]
+fn txtdoc_pos(file: &str, line: u32, character: u32) -> TextDocumentPositionParams {
+    TextDocumentPositionParams {
+        text_document: txt_doc_id(file),
+        position: lsp_types::Position { line, character },
     }
 }

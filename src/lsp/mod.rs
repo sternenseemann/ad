@@ -9,14 +9,14 @@ use crate::{
     input::Event,
     lsp::{
         capabilities::{Capabilities, PositionEncoding},
-        client::{LspClient, LspMessage, Status},
+        client::{LspClient, LspMessage},
         lang::{built_in_configs, LspConfig},
-        messages::{LspRequest, NotificationHandler, RequestHandler},
+        messages::{LspNotification, LspRequest, NotificationHandler, RequestHandler},
         rpc::{Message, Notification, Request, RequestId, Response},
     },
     util::ReadOnlyLock,
 };
-use lsp_types::{NumberOrString, Uri};
+use lsp_types::{request::Initialize, NumberOrString, Uri};
 use std::{
     collections::HashMap,
     sync::{
@@ -109,6 +109,7 @@ impl LspManagerHandle {
             .iter()
             .flat_map(|b| match self.config_for_buffer(b) {
                 Some(config) if &config.lang == lang => Some(PendingParams::DocumentOpen {
+                    lang: lang.clone(),
                     path: b.full_name().to_string(),
                     content: b.str_contents(),
                 }),
@@ -172,12 +173,24 @@ impl LspManagerHandle {
     }
 
     pub fn document_opened(&self, b: &Buffer) {
+        let lang = match self.config_for_buffer(b) {
+            Some(config) => config.lang.clone(),
+            None => return,
+        };
+
         if let Some((id, _)) = self.lsp_id_and_encoding_for(b) {
             debug!("sending LSP textDocument/didOpen ({id})");
             let path = b.full_name().to_string();
             let content = b.str_contents();
 
-            self.send(id, PendingParams::DocumentOpen { path, content })
+            self.send(
+                id,
+                PendingParams::DocumentOpen {
+                    lang,
+                    path,
+                    content,
+                },
+            )
         }
     }
 
@@ -311,7 +324,6 @@ impl LspManager {
                 } => self.start_client(lang, cmd, args, root, open_bufs),
                 Req::Stop { lsp_id } => self.stop_client(lsp_id),
                 Req::Pending(p) => self.handle_pending(p),
-
                 Req::Message(LspMessage { lsp_id, msg }) => match msg {
                     Message::Request(r) => self.handle_request(lsp_id, r),
                     Message::Response(r) => self.handle_response(lsp_id, r),
@@ -322,114 +334,32 @@ impl LspManager {
     }
 
     fn handle_pending(&mut self, PendingRequest { lsp_id, pending }: PendingRequest) {
-        // this is a macro as we don't need an attached client for the active buffer in
-        // order to show all diagnostics
-        macro_rules! client {
-            () => {
-                match self.clients.get_mut(&lsp_id) {
-                    Some(client) => match client.status {
-                        Status::Running => client,
-                        Status::Initializing => {
-                            self.send_status("LSP server still initializing");
-                            return;
-                        }
-                    },
-                    None => return self.send_status("no attached LSP client for buffer"),
-                }
-            };
-        }
+        use lsp_types::{
+            notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument},
+            request::{
+                GotoDeclaration, GotoDefinition, GotoTypeDefinition, HoverRequest, References,
+            },
+        };
 
         match pending {
-            PendingParams::DocumentOpen { path, content } => {
-                if let Err(e) = client!().document_did_open(path, content) {
-                    self.report_error(format!("unable to notify document open: {e}"))
-                }
-            }
-
-            PendingParams::DocumentClose { path } => {
-                if let Err(e) = client!().document_did_close(path) {
-                    self.report_error(format!("unable to notify document close: {e}"))
-                }
-            }
-
+            PendingParams::DocumentOpen {
+                lang,
+                path,
+                content,
+            } => DidOpenTextDocument::send(lsp_id, (lang, path, content), self),
+            PendingParams::DocumentClose { path } => DidCloseTextDocument::send(lsp_id, path, self),
             PendingParams::DocumentChange {
                 path,
                 content,
                 version,
-            } => {
-                if let Err(e) = client!().document_did_change(path, content, version) {
-                    self.report_error(format!("unable to notify document change: {e}"))
-                }
-            }
-
-            PendingParams::GotoDeclaration(pos) => {
-                let client = client!();
-                match client.goto_declaration(&pos.file, pos.line, pos.character) {
-                    Ok(req_id) => {
-                        self.pending
-                            .insert((client.id, req_id), Pending::GotoDeclaration);
-                        self.send_status("requesting goto definition");
-                    }
-
-                    Err(e) => {
-                        self.report_error(format!("unable to request LSP goto declaration: {e}"))
-                    }
-                }
-            }
-
-            PendingParams::GotoDefinition(pos) => {
-                let client = client!();
-                match client.goto_definition(&pos.file, pos.line, pos.character) {
-                    Ok(req_id) => {
-                        self.pending
-                            .insert((client.id, req_id), Pending::GotoDefinition);
-                        self.send_status("requesting goto definition");
-                    }
-
-                    Err(e) => {
-                        self.report_error(format!("unable to request LSP goto definition: {e}"))
-                    }
-                }
-            }
-
+            } => DidChangeTextDocument::send(lsp_id, (path, content, version as i32), self),
+            PendingParams::GotoDeclaration(pos) => GotoDeclaration::send(lsp_id, pos, (), self),
+            PendingParams::GotoDefinition(pos) => GotoDefinition::send(lsp_id, pos, (), self),
             PendingParams::GotoTypeDefinition(pos) => {
-                let client = client!();
-                match client.goto_type_definition(&pos.file, pos.line, pos.character) {
-                    Ok(req_id) => {
-                        self.pending
-                            .insert((client.id, req_id), Pending::GotoTypeDefinition);
-                        self.send_status("requesting goto definition");
-                    }
-
-                    Err(e) => self
-                        .report_error(format!("unable to request LSP goto type definition: {e}")),
-                }
+                GotoTypeDefinition::send(lsp_id, pos, (), self)
             }
-
-            PendingParams::Hover(pos) => {
-                let client = client!();
-                match client.hover(&pos.file, pos.line, pos.character) {
-                    Ok(req_id) => {
-                        self.pending.insert((client.id, req_id), Pending::Hover);
-                        self.send_status("requesting hover");
-                    }
-
-                    Err(e) => self.report_error(format!("unable to request LSP hover: {e}")),
-                }
-            }
-
-            PendingParams::FindReferences(pos) => {
-                let client = client!();
-                match client.find_references(&pos.file, pos.line, pos.character) {
-                    Ok(req_id) => {
-                        self.pending
-                            .insert((client.id, req_id), Pending::FindReferences);
-                        self.send_status("requesting references");
-                    }
-
-                    Err(e) => self.report_error(format!("unable to request LSP references: {e}")),
-                }
-            }
+            PendingParams::Hover(pos) => HoverRequest::send(lsp_id, pos, (), self),
+            PendingParams::FindReferences(pos) => References::send(lsp_id, pos, (), self),
         }
     }
 
@@ -519,47 +449,35 @@ impl LspManager {
         open_bufs: Vec<PendingParams>,
     ) {
         let lsp_id = self.next_id();
-        let mut client = match LspClient::new(lsp_id, &lang, &cmd, args, self.tx_req.clone()) {
-            Ok(client) => client,
+        match LspClient::new(lsp_id, &cmd, args, self.tx_req.clone()) {
+            Ok(client) => self.clients.insert(lsp_id, client),
             Err(e) => {
                 return self.report_error(format!("failed to start LSP server: {e}"));
             }
         };
-        let req_id = match client.initialize(&root) {
-            Ok(id) => id,
-            Err(e) => {
-                return self.report_error(format!("failed to initialize LSP server: {e}"));
-            }
-        };
 
-        self.clients.insert(lsp_id, client);
-        self.pending
-            .insert((lsp_id, req_id), Pending::Initialize(lang, open_bufs));
-        self.send_status("LSP server started")
+        Initialize::send(lsp_id, root, (lang, open_bufs), self);
+        self.send_status("LSP server started");
     }
 
     fn stop_client(&mut self, lsp_id: usize) {
-        let client = match self.clients.remove(&lsp_id) {
-            Some(client) => client,
-            None => return self.report_error("no attached LSP server"),
-        };
+        use lsp_types::{notification::Exit, request::Shutdown};
 
-        let cmd = client.cmd.clone();
-        let message = match client.shutdown_and_exit() {
-            Ok(_) => "LSP server shutdown".to_string(),
-            Err(e) => {
-                format!("error shutting down LSP({cmd}): {e}")
-            }
-        };
-        self.send_status(message);
+        Shutdown::send(lsp_id, (), (), self);
+        Exit::send(lsp_id, (), self);
+
+        match self.clients.remove(&lsp_id) {
+            Some(client) => client.join(),
+            None => self.report_error("no attached LSP server"),
+        }
     }
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct Pos {
-    file: String,
-    line: u32,
-    character: u32,
+    pub(crate) file: String,
+    pub(crate) line: u32,
+    pub(crate) character: u32,
 }
 
 impl Pos {
@@ -589,6 +507,7 @@ pub(crate) enum PendingParams {
         path: String,
     },
     DocumentOpen {
+        lang: String,
         path: String,
         content: String,
     },
