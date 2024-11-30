@@ -62,6 +62,7 @@ pub enum Action {
     DotSetFromCoords { coords: Coords },
     DragWindow { direction: Arrow },
     EditCommand { cmd: String },
+    EnsureFileIsOpen { path: String },
     ExecuteDot,
     ExecuteString { s: String },
     Exit { force: bool },

@@ -600,7 +600,7 @@ impl MbSelect for Diagnostics {
         self.clone().into_selector()
     }
 
-    fn prompt_and_options(&self) -> (String, Vec<String>) {
+    fn prompt_and_options(&self, _: &Buffers) -> (String, Vec<String>) {
         (
             "Diagnostics> ".to_owned(),
             self.0.iter().map(|d| d.content.clone()).collect(),

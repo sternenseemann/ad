@@ -3,7 +3,7 @@
 //!
 //! Conceptually this is operates as an embedded dmenu.
 use crate::{
-    buffer::{Buffer, GapBuffer},
+    buffer::{Buffer, Buffers, GapBuffer},
     config_handle,
     dot::TextObject,
     editor::Actions,
@@ -315,7 +315,7 @@ where
 /// a selection.
 pub(crate) trait MbSelect: Send + Sync {
     fn clone_selector(&self) -> MbSelector;
-    fn prompt_and_options(&self) -> (String, Vec<String>);
+    fn prompt_and_options(&self, buffers: &Buffers) -> (String, Vec<String>);
     fn selected_actions(&self, sel: MiniBufferSelection) -> Option<Actions>;
 
     fn into_selector(self) -> MbSelector
@@ -352,7 +352,7 @@ impl MbSelector {
     where
         S: System,
     {
-        let (prompt, options) = self.0.prompt_and_options();
+        let (prompt, options) = self.0.prompt_and_options(ed.layout.buffers());
         let selection = ed.prompt_w_callback(&prompt, options, |_| None);
         if let Some(actions) = self.0.selected_actions(selection) {
             ed.handle_actions(actions, Source::Fsys);

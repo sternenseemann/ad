@@ -50,6 +50,10 @@ impl Layout {
         &self.buffers
     }
 
+    pub(crate) fn ensure_file_is_open(&mut self, path: &str) {
+        self.buffers.ensure_file_is_open(path)
+    }
+
     pub(crate) fn is_empty_scratch(&self) -> bool {
         self.buffers.is_empty_scratch()
     }

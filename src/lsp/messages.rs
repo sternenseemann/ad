@@ -1,5 +1,6 @@
 //! Traits and handlers for processing LSP messages
 use crate::{
+    buffer::Buffers,
     editor::{Action, Actions, MbSelect, MbSelector, MiniBufferSelection, ViewPort},
     input::Event,
     lsp::{
@@ -75,32 +76,20 @@ impl LspRequest for lsp_types::request::GotoDefinition {
     ) -> Option<Actions> {
         let enc = man.clients.get(&lsp_id)?.position_encoding;
 
-        match params? {
-            GotoDefinitionResponse::Scalar(loc) => {
-                let (path, coords) = Coords::new(loc, enc);
-
-                Some(Actions::Multi(vec![
-                    Action::OpenFile { path },
-                    Action::DotSetFromCoords { coords },
-                    Action::SetViewPort(ViewPort::Center),
-                ]))
-            }
-
-            GotoDefinitionResponse::Array(mut locs) => {
-                let (path, coords) = Coords::new(locs.remove(0), enc);
-
-                Some(Actions::Multi(vec![
-                    Action::OpenFile { path },
-                    Action::DotSetFromCoords { coords },
-                    Action::SetViewPort(ViewPort::Center),
-                ]))
-            }
-
+        let (path, coords) = match params? {
+            GotoDefinitionResponse::Scalar(loc) => Coords::new(loc, enc),
+            GotoDefinitionResponse::Array(mut locs) => Coords::new(locs.remove(0), enc),
             GotoDefinitionResponse::Link(links) => {
                 error!("unhandled goto definition links response: {links:?}");
-                None
+                return None;
             }
-        }
+        };
+
+        Some(Actions::Multi(vec![
+            Action::OpenFile { path },
+            Action::DotSetFromCoords { coords },
+            Action::SetViewPort(ViewPort::Center),
+        ]))
     }
 }
 
@@ -192,32 +181,51 @@ impl LspRequest for lsp_types::request::References {
             }
         };
 
-        Some(Actions::Multi(vec![Action::MbSelect(
-            References(
-                locs?
-                    .into_iter()
-                    .map(|loc| Reference::from_loc(loc, enc))
-                    .collect(),
-            )
-            .into_selector(),
-        )]))
+        let refs: Vec<_> = locs?
+            .into_iter()
+            .map(|loc| Reference::from_loc(loc, enc))
+            .collect();
+        let mut actions: Vec<_> = refs
+            .iter()
+            .map(|r| Action::EnsureFileIsOpen {
+                path: r.path.clone(),
+            })
+            .collect();
+        actions.push(Action::MbSelect(References(refs).into_selector()));
+
+        Some(Actions::Multi(actions))
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Reference {
     path: String,
-    line: String,
     coords: Coords,
+    prefix: String,
 }
 
 impl Reference {
     fn from_loc(loc: Location, enc: PositionEncoding) -> Self {
         let (path, coords) = Coords::new(loc, enc);
-        let fname = path.split("/").last().unwrap();
-        let line = format!("{fname}:{}", coords.line());
+        let prefix = format!("{}:{}", path, coords.line());
 
-        Self { path, line, coords }
+        Self {
+            path,
+            coords,
+            prefix,
+        }
+    }
+
+    fn mb_line(&self, buffers: &Buffers, width: usize) -> String {
+        let try_buffer_line = |path: &str, y: usize| -> Option<String> {
+            let s = buffers.with_path(path)?.line(y)?.to_string();
+            Some(s.trim().to_string())
+        };
+
+        match try_buffer_line(&self.path, self.coords.line() as usize) {
+            Some(line) => format!("{:<width$} | {line}", self.prefix, width = width),
+            None => self.prefix.clone(),
+        }
     }
 }
 
@@ -229,10 +237,17 @@ impl MbSelect for References {
         self.clone().into_selector()
     }
 
-    fn prompt_and_options(&self) -> (String, Vec<String>) {
+    fn prompt_and_options(&self, buffers: &Buffers) -> (String, Vec<String>) {
+        let width = self
+            .0
+            .iter()
+            .map(|r| r.prefix.chars().count())
+            .max()
+            .unwrap_or_default();
+
         (
             "References> ".to_owned(),
-            self.0.iter().map(|r| r.line.clone()).collect(),
+            self.0.iter().map(|r| r.mb_line(buffers, width)).collect(),
         )
     }
 

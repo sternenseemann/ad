@@ -394,6 +394,7 @@ where
                 direction: Arrow::Right,
             } => self.layout.drag_right(),
             EditCommand { cmd } => self.execute_edit_command(&cmd),
+            EnsureFileIsOpen { path } => self.layout.ensure_file_is_open(&path),
             ExecuteDot => self.default_execute_dot(None, source),
             ExecuteString { s } => self.execute_explicit_string(self.active_buffer_id(), s, source),
             Exit { force } => self.exit(force),

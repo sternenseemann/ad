@@ -3,7 +3,7 @@ use crate::{
     dot::TextObject,
     lsp::LspManagerHandle,
     ziplist,
-    ziplist::ZipList,
+    ziplist::{Position, ZipList},
 };
 use ad_event::Source;
 use std::{
@@ -74,15 +74,7 @@ impl Buffers {
             return Ok(None);
         }
 
-        let existing_id = self
-            .inner
-            .iter()
-            .find(|(_, b)| match &b.kind {
-                BufferKind::File(p) | BufferKind::Directory(p) => p == &path,
-                _ => false,
-            })
-            .map(|(_, b)| b.id);
-
+        let existing_id = self.with_path(&path).map(|b| b.id);
         if let Some(existing_id) = existing_id {
             self.notify_lsp_changes_if_dirty();
             self.record_jump_position();
@@ -104,6 +96,25 @@ impl Buffers {
         }
 
         Ok(Some(id))
+    }
+
+    pub fn ensure_file_is_open<P: AsRef<Path>>(&mut self, path: P) {
+        let p = match path.as_ref().canonicalize() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        if self.with_path(&p).is_some() {
+            return;
+        }
+
+        let id = self.next_id;
+        self.next_id += 1;
+
+        if let Ok(b) = Buffer::new_from_canonical_file_path(id, p) {
+            self.lsp_handle.document_opened(&b);
+            self.inner.insert_at(Position::Tail, b);
+        }
     }
 
     /// This is a pretty hacky way to handle document sync but given that we are not wanting
@@ -223,6 +234,17 @@ impl Buffers {
         self.inner
             .iter_mut()
             .find(|(_, b)| b.id == id)
+            .map(|(_, b)| b)
+    }
+
+    pub(crate) fn with_path<P: AsRef<Path>>(&self, path: P) -> Option<&Buffer> {
+        let path = path.as_ref();
+        self.inner
+            .iter()
+            .find(|(_, b)| match &b.kind {
+                BufferKind::File(p) | BufferKind::Directory(p) => p == path,
+                _ => false,
+            })
             .map(|(_, b)| b)
     }
 
