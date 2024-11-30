@@ -66,6 +66,14 @@ pub(crate) fn normal_mode() -> Mode {
         [ Char('g'), Char('h') ] => [ DotSet(LineStart, 1) ],
         [ Char('g'), Char('l') ] => [ DotSet(LineEnd, 1) ],
 
+        // LSP
+        [ leader, Char('e') ] => [ LspShowDiagnostics ],
+        [ Char('g'), Char('D') ] => [ LspGotoDeclaration ],
+        [ Char('g'), Char('d') ] => [ LspGotoDefinition ],
+        [ Char('g'), Char('r') ] => [ LspReferences ],
+        [ Char('g'), Char('t') ] => [ LspGotoTypeDefinition ],
+        [ Ctrl('k') ] => [ LspHover ],
+
         // Delimited pairs
         [ Alt('i'), Char('(') ] => [ DotSet(Delimited('(', ')'), 1) ],
         [ Alt('i'), Char(')') ] => [ DotSet(Delimited('(', ')'), 1) ],

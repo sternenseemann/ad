@@ -4,10 +4,11 @@ use crate::{
     config::Config,
     config_handle,
     dot::{Cur, Dot, Range, TextObject},
-    editor::{Editor, MiniBufferSelection},
+    editor::{Editor, MbSelector, MiniBufferSelection},
     exec::{Addr, Address, Program},
     fsys::LogEvent,
     key::{Arrow, Input},
+    lsp::Coords,
     mode::Mode,
     plumb::{MatchOutcome, PlumbingMessage},
     replace_config,
@@ -26,7 +27,7 @@ use std::{
 use tracing::{debug, error, info, trace, warn};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Actions {
+pub enum Actions {
     Single(Action),
     Multi(Vec<Action>),
 }
@@ -58,8 +59,10 @@ pub enum Action {
     DotExtendForward(TextObject, usize),
     DotFlip,
     DotSet(TextObject, usize),
+    DotSetFromCoords { coords: Coords },
     DragWindow { direction: Arrow },
     EditCommand { cmd: String },
+    EnsureFileIsOpen { path: String },
     ExecuteDot,
     ExecuteString { s: String },
     Exit { force: bool },
@@ -72,7 +75,17 @@ pub enum Action {
     JumpListForward,
     JumpListBack,
     LoadDot { new_window: bool },
+    LspGotoDeclaration,
+    LspGotoDefinition,
+    LspGotoTypeDefinition,
+    LspHover,
+    LspReferences,
+    LspShowCapabilities,
+    LspShowDiagnostics,
+    LspStart,
+    LspStop,
     MarkClean { bufid: usize },
+    MbSelect(MbSelector),
     NewEditLogTransaction,
     NewColumn,
     NewWindow,
@@ -81,6 +94,7 @@ pub enum Action {
     NextWindowInColumn,
     OpenFile { path: String },
     OpenFileInNewWindow { path: String },
+    OpenVirtualFile { name: String, txt: String },
     Paste,
     PreviousBuffer,
     PreviousColumn,
@@ -180,7 +194,9 @@ where
                     Ok(true) => {
                         let res = self.minibuffer_prompt("File changed on disk, reload? [y/n]: ");
                         if let Some("y" | "Y" | "yes") = res.as_deref() {
-                            let msg = self.layout.active_buffer_mut().reload_from_disk();
+                            let b = self.layout.active_buffer_mut();
+                            let msg = b.reload_from_disk();
+                            self.lsp_manager.document_changed(b);
                             self.set_status_message(&msg);
                         }
                     }
@@ -291,7 +307,9 @@ where
             None => return,
         };
 
-        let msg = self.layout.active_buffer_mut().save_to_disk_at(p, force);
+        let b = self.layout.active_buffer_mut();
+        let msg = b.save_to_disk_at(p, force);
+        self.lsp_manager.document_changed(b);
         self.set_status_message(&msg);
         let id = self.active_buffer_id();
         _ = self.tx_fsys.send(LogEvent::Save(id));

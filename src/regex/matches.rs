@@ -196,7 +196,7 @@ where
     pub(super) from: usize,
 }
 
-impl<'a, I> Iterator for MatchIter<'a, I>
+impl<I> Iterator for MatchIter<'_, I>
 where
     I: IndexedChars,
 {

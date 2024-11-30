@@ -21,6 +21,7 @@ use crate::{
     ziplist, ORIGINAL_TERMIOS, VERSION,
 };
 use std::{
+    char,
     cmp::min,
     io::{stdin, stdout, Read, Stdin, Stdout, Write},
     panic,
@@ -401,7 +402,7 @@ impl<'a> WinsIter<'a> {
     }
 }
 
-impl<'a> Iterator for WinsIter<'a> {
+impl Iterator for WinsIter<'_> {
     type Item = String;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -474,7 +475,7 @@ impl<'a> ColIter<'a> {
     }
 }
 
-impl<'a> Iterator for ColIter<'a> {
+impl Iterator for ColIter<'_> {
     type Item = String;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -508,7 +509,7 @@ struct WinIter<'a> {
     load_exec_range: Option<(bool, Range)>,
 }
 
-impl<'a> Iterator for WinIter<'a> {
+impl Iterator for WinIter<'_> {
     type Item = String;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -702,7 +703,7 @@ fn styled_rline_unchecked(
 
     let dot_range = b.dot.line_range(y, b).map(map_line_range);
     let (rline, dot_range) = raw_rline_unchecked(b, view, y, lpad, screen_cols, dot_range);
-    let rline = rline.replace("\x1b", "�");
+    let rline = rline.replace("\x1b", char::REPLACEMENT_CHARACTER.to_string().as_str());
 
     let raw_tks = Tokens::Single(Token {
         ty: TokenType::Default,

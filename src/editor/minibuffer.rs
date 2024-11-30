@@ -3,14 +3,21 @@
 //!
 //! Conceptually this is operates as an embedded dmenu.
 use crate::{
-    buffer::{Buffer, GapBuffer},
+    buffer::{Buffer, Buffers, GapBuffer},
     config_handle,
     dot::TextObject,
+    editor::Actions,
     editor::Editor,
     key::{Arrow, Input},
     system::System,
 };
-use std::{cmp::min, ffi::OsStr, fmt, path::Path};
+use ad_event::Source;
+use std::{
+    cmp::{self, min},
+    ffi::OsStr,
+    fmt,
+    path::Path,
+};
 use tracing::trace;
 
 #[derive(Debug, Default)]
@@ -92,7 +99,6 @@ where
         }
     }
 
-    /// Force the cursor to be a single Cur and ensure that its y offset is in bounds
     #[inline]
     fn handle_on_change(&mut self) {
         if let Some(lines) = (self.on_change)(&self.input) {
@@ -302,5 +308,54 @@ where
             };
 
         self.prompt_w_callback(prompt, initial_lines, |_| None)
+    }
+}
+
+/// Something that can be used to open a minibuffer and run subsequent actions based on
+/// a selection.
+pub(crate) trait MbSelect: Send + Sync {
+    fn clone_selector(&self) -> MbSelector;
+    fn prompt_and_options(&self, buffers: &Buffers) -> (String, Vec<String>);
+    fn selected_actions(&self, sel: MiniBufferSelection) -> Option<Actions>;
+
+    fn into_selector(self) -> MbSelector
+    where
+        Self: Sized + 'static,
+    {
+        MbSelector(Box::new(self))
+    }
+}
+
+pub struct MbSelector(Box<dyn MbSelect>);
+
+impl fmt::Debug for MbSelector {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MbSelector").finish()
+    }
+}
+
+impl Clone for MbSelector {
+    fn clone(&self) -> Self {
+        self.0.clone_selector()
+    }
+}
+
+impl cmp::Eq for MbSelector {}
+impl cmp::PartialEq for MbSelector {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl MbSelector {
+    pub(crate) fn run<S>(&self, ed: &mut Editor<S>)
+    where
+        S: System,
+    {
+        let (prompt, options) = self.0.prompt_and_options(ed.layout.buffers());
+        let selection = ed.prompt_w_callback(&prompt, options, |_| None);
+        if let Some(actions) = self.0.selected_actions(selection) {
+            ed.handle_actions(actions, Source::Fsys);
+        }
     }
 }

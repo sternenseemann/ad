@@ -1,7 +1,29 @@
 //! Utility functions
 use crate::editor::built_in_commands;
-use std::{iter::Peekable, str::Chars};
+use std::{
+    iter::Peekable,
+    path::Path,
+    str::Chars,
+    sync::{Arc, LockResult, RwLock, RwLockReadGuard},
+};
 use tracing::warn;
+
+/// A wrapper around an Arc<RwLock<T>> so that the owner is only
+/// permitted read access to the underlying value.
+#[derive(Debug, Default, Clone)]
+pub struct ReadOnlyLock<T>(Arc<RwLock<T>>);
+
+impl<T> ReadOnlyLock<T> {
+    /// Construct a new ReadOnlyLock wrapping an inner Arc<RwLock<T>>
+    pub fn new(inner: Arc<RwLock<T>>) -> Self {
+        Self(inner)
+    }
+
+    /// Obtain a read guard from the underlying RwLock
+    pub fn read(&self) -> LockResult<RwLockReadGuard<'_, T>> {
+        self.0.read()
+    }
+}
 
 /// Pull in data from the ad crate itself to auto-generate the docs on the functionality
 /// available in the editor.
@@ -51,4 +73,11 @@ pub(crate) fn normalize_line_endings(mut s: String) -> String {
     warn!("normalizing \\r characters to \\n");
     s = s.replace("\r\n", "\n");
     s.replace("\r", "\n")
+}
+
+/// Locate the first parent directory containing a target file
+pub(crate) fn parent_dir_containing<'a>(initial: &'a Path, target: &str) -> Option<&'a Path> {
+    initial
+        .ancestors()
+        .find(|&p| p.is_dir() && p.join(target).exists())
 }

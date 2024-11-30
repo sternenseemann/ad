@@ -36,7 +36,7 @@ impl LogBuffer {
 #[derive(Debug)]
 pub struct LogWriter<'a>(MutexGuard<'a, Cursor<Vec<u8>>>);
 
-impl<'a> Write for LogWriter<'a> {
+impl Write for LogWriter<'_> {
     #[inline]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.0.write(buf)

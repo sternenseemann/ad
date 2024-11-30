@@ -8,6 +8,7 @@ use crate::{
     fsys::{AdFs, InputFilter, LogEvent, Message, Req},
     input::Event,
     key::{Arrow, Input},
+    lsp::{LspManager, LspManagerHandle},
     mode::{modes, Mode},
     plumb::PlumbingRules,
     set_config,
@@ -20,7 +21,10 @@ use ad_event::Source;
 use std::{
     env, panic,
     path::PathBuf,
-    sync::mpsc::{channel, Receiver, Sender},
+    sync::{
+        mpsc::{channel, Receiver, Sender},
+        Arc,
+    },
     time::Instant,
 };
 use tracing::{debug, trace, warn};
@@ -33,7 +37,7 @@ mod mouse;
 
 pub(crate) use actions::{Action, Actions, ViewPort};
 pub(crate) use built_in_commands::built_in_commands;
-pub(crate) use minibuffer::{MiniBufferSelection, MiniBufferState};
+pub(crate) use minibuffer::{MbSelect, MbSelector, MiniBufferSelection, MiniBufferState};
 pub(crate) use mouse::Click;
 
 /// The mode that the [Editor] will run in following a call to [Editor::run].
@@ -58,6 +62,7 @@ where
     modes: Vec<Mode>,
     pending_keys: Vec<Input>,
     layout: Layout,
+    lsp_manager: Arc<LspManagerHandle>,
     tx_events: Sender<Event>,
     rx_events: Receiver<Event>,
     tx_fsys: Sender<LogEvent>,
@@ -101,6 +106,8 @@ where
         let (tx_fsys, rx_fsys) = channel();
 
         set_config(cfg);
+        let lsp_manager = Arc::new(LspManager::spawn(tx_events.clone()));
+        let layout = Layout::new(0, 0, lsp_manager.clone());
 
         Self {
             system,
@@ -109,7 +116,8 @@ where
             running: true,
             modes: modes(),
             pending_keys: Vec::new(),
-            layout: Layout::new(0, 0),
+            layout,
+            lsp_manager,
             tx_events,
             rx_events,
             tx_fsys,
@@ -156,6 +164,7 @@ where
         match event {
             Event::Input(i) => self.handle_input(i),
             Event::Action(a) => self.handle_action(a, Source::Fsys),
+            Event::Actions(a) => self.handle_actions(a, Source::Fsys),
             Event::Message(msg) => self.handle_message(msg),
             Event::WinsizeChanged { rows, cols } => self.update_window_size(rows, cols),
         }
@@ -206,6 +215,7 @@ where
             match self.rx_events.recv().unwrap() {
                 Event::Input(k) => return k,
                 Event::Action(a) => self.handle_action(a, Source::Fsys),
+                Event::Actions(a) => self.handle_actions(a, Source::Fsys),
                 Event::Message(msg) => self.handle_message(msg),
                 Event::WinsizeChanged { rows, cols } => self.update_window_size(rows, cols),
             }
@@ -384,6 +394,7 @@ where
                 direction: Arrow::Right,
             } => self.layout.drag_right(),
             EditCommand { cmd } => self.execute_edit_command(&cmd),
+            EnsureFileIsOpen { path } => self.layout.ensure_file_is_open(&path),
             ExecuteDot => self.default_execute_dot(None, source),
             ExecuteString { s } => self.execute_explicit_string(self.active_buffer_id(), s, source),
             Exit { force } => self.exit(force),
@@ -394,7 +405,41 @@ where
             JumpListForward => self.jump_forward(),
             JumpListBack => self.jump_backward(),
             LoadDot { new_window } => self.default_load_dot(source, new_window),
+            LspShowCapabilities => {
+                if let Some((name, txt)) = self
+                    .lsp_manager
+                    .show_server_capabilities(self.layout.active_buffer())
+                {
+                    self.layout.open_virtual(name, txt, true)
+                }
+            }
+            LspShowDiagnostics => {
+                let action = self
+                    .lsp_manager
+                    .show_diagnostics(self.layout.active_buffer());
+                self.handle_action(action, Source::Fsys);
+            }
+            LspStart => {
+                if let Some(msg) = self.lsp_manager.start_client(self.layout.buffers()) {
+                    self.set_status_message(msg);
+                }
+            }
+            LspStop => self.lsp_manager.stop_client(self.layout.active_buffer()),
+            LspGotoDeclaration => self
+                .lsp_manager
+                .goto_declaration(self.layout.active_buffer()),
+            LspGotoDefinition => self
+                .lsp_manager
+                .goto_definition(self.layout.active_buffer()),
+            LspGotoTypeDefinition => self
+                .lsp_manager
+                .goto_type_definition(self.layout.active_buffer()),
+            LspHover => self.lsp_manager.hover(self.layout.active_buffer()),
+            LspReferences => self
+                .lsp_manager
+                .find_references(self.layout.active_buffer()),
             MarkClean { bufid } => self.mark_clean(bufid),
+            MbSelect(selector) => selector.run(self),
             NewEditLogTransaction => self.layout.active_buffer_mut().new_edit_log_transaction(),
             NewColumn => self.layout.new_column(),
             NewWindow => self.layout.new_window(),
@@ -414,6 +459,7 @@ where
             }
             OpenFile { path } => self.open_file_relative_to_cwd(&path, false),
             OpenFileInNewWindow { path } => self.open_file_relative_to_cwd(&path, true),
+            OpenVirtualFile { name, txt } => self.layout.open_virtual(name, txt, true),
             Paste => self.paste_from_clipboard(source),
             PreviousBuffer => {
                 let id = self.layout.focus_previous_buffer();

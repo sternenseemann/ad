@@ -130,7 +130,7 @@ impl Find for char {
 }
 
 // Strings need to locate themselves character by character.
-impl<'a> Find for &'a str {
+impl Find for &str {
     type Reversed = String;
 
     fn try_find<I>(&self, it: I) -> Option<(usize, usize)>

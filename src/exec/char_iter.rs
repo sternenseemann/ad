@@ -49,7 +49,7 @@ pub enum CharIter<'a> {
     StdIn(CachedStdinIter<'a>),
 }
 
-impl<'a> Iterator for CharIter<'a> {
+impl Iterator for CharIter<'_> {
     type Item = (usize, char);
 
     fn next(&mut self) -> Option<Self::Item> {

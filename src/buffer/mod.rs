@@ -3,9 +3,10 @@ use crate::{
     config_handle,
     dot::{find::find_forward_wrapping, Cur, Dot, Range, TextObject},
     editor::Action,
-    exec::IterBoundedChars,
+    exec::{Addr, Address, IterBoundedChars},
     fsys::InputFilter,
     key::Input,
+    lsp::Coords,
     util::normalize_line_endings,
     MAX_NAME_LEN, UNNAMED_BUFFER,
 };
@@ -75,7 +76,15 @@ impl BufferKind {
         }
     }
 
-    /// The directory containing the file backing this buffer so long as it has kind `File`.
+    /// The path for the file backing this buffer (if any).
+    fn path(&self) -> Option<&Path> {
+        match &self {
+            BufferKind::File(p) => Some(p.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// The directory containing the file backing this buffer (if any).
     fn dir(&self) -> Option<&Path> {
         match &self {
             BufferKind::File(p) => p.parent(),
@@ -343,9 +352,14 @@ impl Buffer {
         }
     }
 
-    /// The directory containing the file backing this buffer so long as it has kind `File`.
+    /// The directory containing the file backing this buffer (if any).
     pub fn dir(&self) -> Option<&Path> {
         self.kind.dir()
+    }
+
+    /// The path for the file backing this buffer (if any).
+    pub fn path(&self) -> Option<&Path> {
+        self.kind.path()
     }
 
     /// The key for the +output buffer that output from command run from this buffer should be
@@ -371,6 +385,7 @@ impl Buffer {
     pub fn str_contents(&self) -> String {
         let mut s = self.txt.to_string();
         s.push('\n');
+
         s
     }
 
@@ -415,6 +430,12 @@ impl Buffer {
     #[inline]
     pub fn len_lines(&self) -> usize {
         self.txt.len_lines()
+    }
+
+    /// The number of utf-8 characters currently held in the buffer.
+    #[inline]
+    pub fn len_chars(&self) -> usize {
+        self.txt.len_chars()
     }
 
     /// Whether or not the buffer is empty.
@@ -682,6 +703,7 @@ impl Buffer {
             Action::DotExtendForward(tobj, count) => self.extend_dot_forward(tobj, count),
             Action::DotFlip => self.dot.flip(),
             Action::DotSet(t, count) => self.set_dot(t, count),
+            Action::DotSetFromCoords { coords } => self.set_dot_from_coords(coords),
 
             Action::RawInput { i } => return self.handle_raw_input(i),
 
@@ -749,6 +771,13 @@ impl Buffer {
         for _ in 0..n {
             t.set_dot(self);
         }
+        self.dot.clamp_idx(self.txt.len_chars());
+        self.xdot.clamp_idx(self.txt.len_chars());
+    }
+
+    fn set_dot_from_coords(&mut self, coords: Coords) {
+        let mut addr: Addr = coords.as_addr(self);
+        self.dot = self.map_addr(&mut addr);
         self.dot.clamp_idx(self.txt.len_chars());
         self.xdot.clamp_idx(self.txt.len_chars());
     }
