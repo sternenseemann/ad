@@ -1,9 +1,3 @@
-// NOTE: this file can not include any imports as it is included in build.rs in order
-//       to auto-generate the help page. The function below is used in a test case in
-//       commands.rs in order to ensure that all of the commands included here parse
-//       correctly.
-
-#[allow(dead_code)]
 pub fn built_in_commands() -> Vec<(Vec<&'static str>, &'static str)> {
     vec![
         (
@@ -135,5 +129,14 @@ pub fn built_in_commands() -> Vec<(Vec<&'static str>, &'static str)> {
             vec!["w!", "write!"],
             "save the current buffer to disk ignoring external changes",
         ),
+        (vec!["LspFindReferences"], "show references to the symbol under the current cursor in the mini-buffer (requires an attached LSP server)"),
+        (vec!["LspGotoDeclaration"], "jump to the declaration of the symbol under the current cursor (requires an attached LSP server)"),
+        (vec!["LspGotoDefinition"], "jump to the definition of the symbol under the current cursor (requires an attached LSP server)"),
+        (vec!["LspGotoTypeDefinition"], "jump to the definition of the type of symbol under the current cursor (requires an attached LSP server)"),
+        (vec!["LspHover"], "display hover text for the symbol under the current cursor in a new window (requires an attached LSP server)"),
+        (vec!["LspShowCapabilities"], "display the JSON capabilities of the LSP server for the current buffer (requires an attached LSP server)"),
+        (vec!["LspShowDiagnostics"], "display all LSP diagnostics in the mini-buffer"),
+        (vec!["LspStart"], "attempt to start an LSP server associated with the current filetype"),
+        (vec!["LspStop"], "stop the LSP server associated with the current filetype"),
     ]
 }

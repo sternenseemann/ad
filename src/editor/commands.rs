@@ -83,14 +83,14 @@ fn parse_command(input: &str, active_buffer_id: usize, cwd: &Path) -> Result<Act
         "Load" => Ok(Single(LoadDot { new_window: false })),
 
         "LspFindReferences" => Ok(Single(LspReferences)),
+        "LspGotoDeclaration" => Ok(Single(LspGotoDeclaration)),
+        "LspGotoDefinition" => Ok(Single(LspGotoDefinition)),
+        "LspGotoTypeDefinition" => Ok(Single(LspGotoTypeDefinition)),
+        "LspHover" => Ok(Single(LspHover)),
         "LspShowCapabilities" => Ok(Single(LspShowCapabilities)),
         "LspShowDiagnostics" => Ok(Single(LspShowDiagnostics)),
         "LspStart" => Ok(Single(LspStart)),
         "LspStop" => Ok(Single(LspStop)),
-        "LspGotoDec" => Ok(Single(LspGotoDeclaration)),
-        "LspGotoDef" => Ok(Single(LspGotoDefinition)),
-        "LspGotoTypeDef" => Ok(Single(LspGotoTypeDefinition)),
-        "LspHover" => Ok(Single(LspHover)),
 
         "o" | "open" => {
             if args.is_empty() {
