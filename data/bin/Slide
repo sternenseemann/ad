@@ -22,7 +22,8 @@
 
 requireAd
 
-f="$(basename "$(bufRead "$bufid" filename)")"
+fname="$(bufRead "$bufid" filename)"
+f="$(basename "$fname")"
 d="$(dirname "$fname")"
 
 [ ! -f "$d/index" ] && adError "not in a slideshow directory"
@@ -47,7 +48,7 @@ esac
 
 # TODO: being able to replace the current buffer with a new one
 #       rather than opening new buffers each time would be nice
-adCtl "open $toLoad"
+adCtl "open $d/$toLoad"
 adCtl "Get"
 adEdit "0 i/[PrevSlide] [NextSlide]\n\n/"
 id="$(currentBufferId)"
