@@ -69,18 +69,36 @@ pub struct DefaultSystem;
 #[cfg(target_os = "linux")]
 impl System for DefaultSystem {
     fn set_clipboard(&mut self, s: &str) -> io::Result<()> {
-        let mut child = Command::new("xclip")
-            .args(["-selection", "clipboard", "-i"])
-            .stdin(Stdio::piped())
-            .spawn()?;
+        let mut child = if env::var("WAYLAND_DISPLAY").is_ok() {
+            Command::new("wl-copy").stdin(Stdio::piped()).spawn()
+        } else if env::var("DISPLAY").is_ok() {
+            Command::new("xclip")
+                .args(["-selection", "clipboard", "-i"])
+                .stdin(Stdio::piped())
+                .spawn()
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Can't use clipboard without X11 or Wayland display",
+            ))
+        }?;
 
         child.stdin.take().unwrap().write_all(s.as_bytes())
     }
 
     fn read_clipboard(&self) -> io::Result<String> {
-        let output = Command::new("xclip")
-            .args(["-selection", "clipboard", "-o"])
-            .output()?;
+        let output = if env::var("WAYLAND_DISPLAY").is_ok() {
+            Command::new("wl-paste").output()
+        } else if env::var("DISPLAY").is_ok() {
+            Command::new("xclip")
+                .args(["-selection", "clipboard", "-o"])
+                .output()
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Cant't use clipboard without X11 or Wayland display",
+            ))
+        }?;
 
         Ok(String::from_utf8(output.stdout).unwrap_or_default())
     }
