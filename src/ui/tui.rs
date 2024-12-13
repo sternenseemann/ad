@@ -763,11 +763,38 @@ fn spawn_input_thread(tx: Sender<Event>) -> JoinHandle<()> {
 }
 
 fn try_read_char(stdin: &mut Stdin) -> Option<char> {
-    let mut buf: [u8; 1] = [0; 1];
-    if stdin.read_exact(&mut buf).is_ok() {
-        Some(buf[0] as char)
-    } else {
-        None
+    let mut buf: [u8; 4] = [0; 4];
+    let mut index: usize = 0;
+    loop {
+        // UTF-8 can represent all codepoints in 4 bytes or less,
+        // so we've read invalid UTF-8.
+        if index >= buf.len() {
+            return Some(char::REPLACEMENT_CHARACTER);
+        }
+
+        let mut single: [u8; 1] = [0; 1];
+        if !stdin.read_exact(&mut single).is_ok() {
+            if index == 0 {
+                return None;
+            } else {
+                // End of input despite the UTF-8 decoding needing more bytes
+                return Some(char::REPLACEMENT_CHARACTER);
+            }
+        }
+
+        buf[index] = single[0];
+        index = index + 1;
+
+        match std::str::from_utf8(&buf[0..index]) {
+            Ok(str) => return Some(str.chars().nth(0).unwrap()),
+            Err(utf8_error) => {
+                if utf8_error.error_len().is_none() {
+                    continue; // missing input
+                } else {
+                    return Some(char::REPLACEMENT_CHARACTER);
+                }
+            }
+        };
     }
 }
 
