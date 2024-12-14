@@ -2,12 +2,11 @@
 use crate::{
     fs::{Mode, Perm, Stat},
     protocol::{Data, Format9p, RawStat, Rdata, Rmessage, Tdata, Tmessage},
-    Stream,
+    unix, Stream,
 };
 use std::{
     cmp::min,
     collections::HashMap,
-    env,
     io::{self, Cursor, ErrorKind},
     mem,
     net::{TcpStream, ToSocketAddrs},
@@ -164,11 +163,10 @@ impl Client<UnixStream> {
     /// The default namespace is located in /tmp/ns.$USER.:0/
     pub fn new_unix(server_name: impl Into<String>, aname: impl Into<String>) -> io::Result<Self> {
         let server_name = server_name.into();
-        let uname = match env::var("USER") {
-            Ok(s) => s,
-            Err(_) => return err("USER env var not set"),
-        };
-        let path = format!("/tmp/ns.{uname}.:0/{server_name}");
+        let namespace = unix::namespace().map_err(io::Error::other)?;
+        let path = format!("{namespace}/{server_name}");
+
+        let uname = unix::get_user_name().map_err(io::Error::other)?;
 
         Self::new_unix_with_explicit_path(uname, path, aname)
     }

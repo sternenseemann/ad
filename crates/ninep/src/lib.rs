@@ -21,6 +21,7 @@ pub mod client;
 pub mod fs;
 pub mod protocol;
 pub mod server;
+pub mod unix;
 
 use protocol::{Format9p, Rdata, Rmessage};
 

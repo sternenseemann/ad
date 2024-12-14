@@ -2,12 +2,12 @@
 use crate::{
     fs::{FileMeta, FileType, IoUnit, Mode, Perm, Stat, QID_ROOT},
     protocol::{Data, Format9p, Qid, RawStat, Rdata, Tdata, Tmessage, MAX_DATA_LEN},
-    Result, Stream,
+    unix, Result, Stream,
 };
 use std::{
     cmp::min,
     collections::btree_map::{BTreeMap, Entry},
-    env, fs,
+    fs,
     mem::size_of,
     net::TcpListener,
     os::unix::net::UnixListener,
@@ -32,14 +32,12 @@ impl Drop for Socket {
 
 /// The unix socket path that will be used for a given server name.
 pub fn socket_path(name: &str) -> String {
-    let uname = env::var("USER").unwrap();
-    let socket_dir = format!("/tmp/ns.{uname}.:0");
+    let socket_dir = unix::namespace().unwrap();
     format!("{socket_dir}/{name}")
 }
 
 fn unix_socket(name: &str) -> Socket {
-    let uname = env::var("USER").unwrap();
-    let socket_dir = format!("/tmp/ns.{uname}.:0");
+    let socket_dir = unix::namespace().unwrap();
     let _ = fs::create_dir_all(&socket_dir);
     let path = format!("{socket_dir}/{name}");
 
