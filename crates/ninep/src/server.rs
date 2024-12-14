@@ -11,6 +11,7 @@ use std::{
     mem::size_of,
     net::TcpListener,
     os::unix::net::UnixListener,
+    path::{Path, PathBuf},
     sync::{mpsc::Receiver, Arc, Mutex, RwLock},
     thread::{spawn, JoinHandle},
 };
@@ -20,7 +21,7 @@ pub const AFID_NO_AUTH: u32 = u32::MAX;
 
 #[derive(Debug)]
 struct Socket {
-    path: String,
+    path: PathBuf,
     listener: UnixListener,
 }
 
@@ -31,15 +32,17 @@ impl Drop for Socket {
 }
 
 /// The unix socket path that will be used for a given server name.
-pub fn socket_path(name: &str) -> String {
-    let socket_dir = unix::namespace().unwrap();
-    format!("{socket_dir}/{name}")
+pub fn socket_path(name: impl AsRef<Path>) -> PathBuf {
+    let mut path = unix::namespace().unwrap();
+    path.push(name);
+    path
 }
 
-fn unix_socket(name: &str) -> Socket {
-    let socket_dir = unix::namespace().unwrap();
-    let _ = fs::create_dir_all(&socket_dir);
-    let path = format!("{socket_dir}/{name}");
+fn unix_socket(name: impl AsRef<Path>) -> Socket {
+    let path = socket_path(name);
+    if let Some(socket_dir) = path.parent() {
+        let _ = fs::create_dir_all(socket_dir);
+    }
 
     // FIXME: really we should be handling this on exit but we'll need to catch
     // ctrl-c to do that properly. For now this works but it means that if you

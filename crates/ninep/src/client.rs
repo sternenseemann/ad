@@ -11,6 +11,7 @@ use std::{
     mem,
     net::{TcpStream, ToSocketAddrs},
     os::unix::net::UnixStream,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
 };
 
@@ -134,7 +135,7 @@ impl Client<UnixStream> {
     /// Create a new [Client] connected to a unix socket at the specified path.
     pub fn new_unix_with_explicit_path(
         uname: String,
-        path: String,
+        path: PathBuf,
         aname: impl Into<String>,
     ) -> io::Result<Self> {
         let stream = UnixStream::connect(path)?;
@@ -161,10 +162,9 @@ impl Client<UnixStream> {
     /// to the filetree given by `aname`.
     ///
     /// The default namespace is located in /tmp/ns.$USER.:0/
-    pub fn new_unix(server_name: impl Into<String>, aname: impl Into<String>) -> io::Result<Self> {
-        let server_name = server_name.into();
-        let namespace = unix::namespace().map_err(io::Error::other)?;
-        let path = format!("{namespace}/{server_name}");
+    pub fn new_unix(server_name: impl AsRef<Path>, aname: impl Into<String>) -> io::Result<Self> {
+        let mut path = unix::namespace().map_err(io::Error::other)?;
+        path.push(server_name);
 
         let uname = unix::get_user_name().map_err(io::Error::other)?;
 

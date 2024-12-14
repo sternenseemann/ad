@@ -216,7 +216,8 @@ impl AdFs {
 
         if auto_mount {
             let res = Command::new("9pfuse")
-                .args([socket_path, mount_path])
+                .arg(socket_path)
+                .arg(mount_path)
                 .spawn();
 
             if let Ok(mut child) = res {

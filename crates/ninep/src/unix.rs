@@ -5,11 +5,14 @@
 
 use crate::Result;
 
-use std::env;
+use std::{env, ffi::OsString, path::PathBuf};
 
-pub fn namespace() -> Result<String> {
+pub fn namespace() -> Result<PathBuf> {
     let uname = get_user_name()?;
-    Ok(format!("/tmp/ns.{uname}.:0"))
+    let mut ns = OsString::from("/tmp/ns.");
+    ns.push(uname);
+    ns.push(".:0");
+    Ok(ns.into())
 }
 
 // FIXME: use something more robust like getuid()
