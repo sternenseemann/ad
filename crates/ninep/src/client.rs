@@ -157,17 +157,18 @@ impl Client<UnixStream> {
         Ok(client)
     }
 
-    /// Create a new [Client] connected to a unix socket at the given aname under the default
-    /// namespace.
+    /// Create a new [Client] connected to a unix socket at the given
+    /// `server_name` under the default namespace. The client will attach
+    /// to the filetree given by `aname`.
     ///
     /// The default namespace is located in /tmp/ns.$USER.:0/
-    pub fn new_unix(ns: impl Into<String>, aname: impl Into<String>) -> io::Result<Self> {
-        let ns = ns.into();
+    pub fn new_unix(server_name: impl Into<String>, aname: impl Into<String>) -> io::Result<Self> {
+        let server_name = server_name.into();
         let uname = match env::var("USER") {
             Ok(s) => s,
             Err(_) => return err("USER env var not set"),
         };
-        let path = format!("/tmp/ns.{uname}.:0/{ns}");
+        let path = format!("/tmp/ns.{uname}.:0/{server_name}");
 
         Self::new_unix_with_explicit_path(uname, path, aname)
     }
