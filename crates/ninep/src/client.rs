@@ -161,7 +161,7 @@ impl Client<UnixStream> {
     /// `server_name` under the default namespace. The client will attach
     /// to the filetree given by `aname`.
     ///
-    /// The default namespace is located in /tmp/ns.$USER.:0/
+    /// See `unix::namespace()` on how the namespace is determined.
     pub fn new_unix(server_name: impl AsRef<Path>, aname: impl Into<String>) -> io::Result<Self> {
         let mut path = unix::namespace().map_err(io::Error::other)?;
         path.push(server_name);

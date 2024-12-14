@@ -5,10 +5,10 @@
 //!
 //!   https://9fans.github.io/plan9port/man/man1/9p.html
 //!
-//! ```sh
-//! # Let 9p know where to find the socket we have opened
-//! $ export NAMESPACE="/tmp/ns.$USER.$DISPLAY"
+//! The location of the unix type socket can be customized, see `unix::namespace()`
+//! for details.
 //!
+//! ```sh
 //! # List the contents of the filesystem and read the contents of a file
 //! $ 9p ls ninep-server
 //! $ 9p read ninep-server/foo

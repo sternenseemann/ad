@@ -19,10 +19,12 @@ test it out.
 See [the 9p man page](https://9fans.github.io/plan9port/man/man1/9p.html) for
 more information on how the tool works
 
-```bash
-# Let 9p know where to find the socket we have opened
-$ export NAMESPACE="/tmp/ns.$USER.$DISPLAY"
+If you want to use a non standard location for the unix socket, set
+the `NAMESPACE` environment variable in the environment of both the
+server and the `9p` utility. See [intro(4)](https://9fans.github.io/plan9port/man/man4/intro.html)
+for details.
 
+```bash
 # List the contents of the filesystem and read the contents of a file
 $ 9p ls ninep-server
 $ 9p read ninep-server/foo
