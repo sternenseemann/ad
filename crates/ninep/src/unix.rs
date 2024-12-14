@@ -21,8 +21,8 @@ pub fn namespace() -> Result<PathBuf> {
         Ok(ns.into())
     } else {
         let uname = get_user_name()?;
-        // FIXME: we should fail if DISPLAY is unset, like getns.c in p9p
-        let display = env::var_os("DISPLAY").unwrap_or(OsString::from(":0"));
+        let display = env::var_os("DISPLAY")
+            .ok_or("Need NAMESPACE or DISPLAY environment variable to determine namespace")?;
         // plan9port hardcodes /tmp, believe it or not
         let mut ns = OsString::from("/tmp/ns.");
         ns.push(uname);
